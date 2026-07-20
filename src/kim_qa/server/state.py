@@ -1,0 +1,107 @@
+"""_overlay_state.json persistence + summary.md regeneration.
+
+State schema, one entry per session id:
+    {"offset": float, "ranges": [[lo, hi], ...], "y_range": float | None,
+     "hex_override": str | None, "offset_origin": str}
+Unknown keys written by other tools are preserved on update.
+"""
+import json
+from pathlib import Path
+
+import numpy as np
+
+from kim_qa.metrics import overlay_metrics_table, overlay_residuals
+from .discovery import Session
+from .payloads import build_overlay_payload
+
+STATE_FILENAME = "_overlay_state.json"
+SUMMARY_FILENAME = "summary.md"
+
+
+def load_state(root: Path) -> dict:
+    path = Path(root) / STATE_FILENAME
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def update_entry(root: Path, session_id: str, entry: dict) -> dict:
+    state = load_state(root)
+    merged = dict(state.get(session_id, {}))
+    merged.update(entry)
+    state[session_id] = merged
+    (Path(root) / STATE_FILENAME).write_text(
+        json.dumps(state, indent=2), encoding="utf-8")
+    return state
+
+
+def _payload_metrics(payload: dict, entry: dict):
+    kim = payload["kim"]
+    if "hex" in payload:
+        hx = payload["hex"]
+        hex_t = np.arange(hx["n"]) * hx["dt"]
+        hlr, hsi, hap = hx["lr"], hx["si"], hx["ap"]
+    else:
+        t = np.asarray(kim["t"], float)
+        off = float(entry.get("offset", 0.0))
+        hex_t = np.array([t[0] + off - 1.0, t[-1] + off + 1.0])
+        hlr = hsi = hap = np.zeros(2)
+    res = overlay_residuals(kim["t"], kim["lr"], kim["si"], kim["ap"],
+                            hex_t, hlr, hsi, hap,
+                            float(entry.get("offset", 0.0)),
+                            entry.get("ranges", []))
+    return res, overlay_metrics_table(res)
+
+
+def regenerate_summary(root: Path, sessions: list, vendor: str) -> Path:
+    root = Path(root)
+    state = load_state(root)
+    lines = [f"# {root.name} - overlay results (vendor={vendor})", ""]
+    lines.append("| Folder | Type | Offset (s) | # Ranges | "
+                 "LR mean±std | SI mean±std | AP mean±std | 3D mean±std |")
+    lines.append("|---|---|---|---|---|---|---|---|")
+
+    details = []
+    for sess in sessions:
+        entry = state.get(sess.id)
+        if entry is None or sess.error:
+            continue
+        payload = build_overlay_payload(sess, vendor, entry)
+        res, rows = _payload_metrics(payload, entry)
+        if res.n < 2:
+            cells = ["n<2"] * 4
+        else:
+            cells = [f"{r['mean']:+.2f}±{r['std']:.2f}" for r in rows]
+        lines.append(
+            f"| {sess.id} | {sess.kind} | {float(entry.get('offset', 0)):+.2f} | "
+            f"{len(entry.get('ranges', []))} | "
+            f"{cells[0]} | {cells[1]} | {cells[2]} | {cells[3]} |")
+        details.append((sess, entry, res, rows))
+
+    lines.append("")
+    for sess, entry, res, rows in details:
+        lines.append(f"## {sess.id}")
+        lines.append("")
+        if (sess.folder / "overlay.png").exists():
+            lines.append(f"![overlay]({sess.id}/overlay.png)")
+            lines.append("")
+        hex_label = sess.hex_file.name if sess.hex_file else "(none, flat-zero)"
+        lines.append(f"- **Type:** {sess.kind}")
+        lines.append(f"- **Hex trace:** {hex_label}")
+        lines.append(f"- **Time offset:** {float(entry.get('offset', 0)):+.2f} s")
+        lines.append(f"- **Ranges:** {len(entry.get('ranges', []))} "
+                     f"(n = {res.n})")
+        lines.append("")
+        if res.n >= 2:
+            lines.append("| Axis | Mean (mm) | Std (mm) | p5 (mm) | p95 (mm) |")
+            lines.append("|---|---|---|---|---|")
+            for r in rows:
+                lines.append(f"| {r['name']} | {r['mean']:+.3f} | "
+                             f"{r['std']:.3f} | {r['p5']:+.3f} | {r['p95']:+.3f} |")
+            lines.append("")
+    out = root / SUMMARY_FILENAME
+    out.write_text("\n".join(lines), encoding="utf-8")
+    return out

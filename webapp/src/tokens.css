@@ -1,0 +1,30 @@
+:root {
+  --orange:        #FF9200;
+  --orange-soft:   #FFB04A;
+  --orange-tint:   #FFF1DC;
+  --pink:          #E71D73;
+  --cyan:          #36A7E1;
+  --green:         #96C13E;
+  --purple:        #951880;
+  --gray:          #797979;
+
+  --ink:           #0a0a0a;
+  --ink-2:         #2a2a2a;
+  --muted:         #6b6b6b;
+  --line:          #e3e3e3;
+  --line-soft:     #f0f0f0;
+  --paper:         #ffffff;
+  --paper-warm:    #faf7f1;
+
+  --font-display:  "Tw Cen MT", "Twentieth Century", "Barlow", "Futura", "Trebuchet MS", sans-serif;
+  --font-body:     "Tw Cen MT", "Twentieth Century", "Barlow", "Futura", "Trebuchet MS", sans-serif;
+  --font-mono:     "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+}
+
+html, body, #root { margin: 0; padding: 0; height: 100%; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}

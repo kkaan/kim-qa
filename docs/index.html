@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PRIME Trial. Real-Time Motion Management for Prostate SBRT</title>
+<meta name="description" content="The PRIME trial brings real-time Kilovoltage Intrafraction Monitoring (KIM) to prostate radiotherapy across 10 Australian centres. Open-source QA tools and downloadable analysis app.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:ital,wght@0,400;0,600;0,700;1,600;1,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* PRIME landing page. Design system shared with the KIM QA app and the
+   phantom-results deck: paper surfaces, orange/cyan accents, Tw Cen MT
+   display (Barlow fallback), JetBrains Mono for data. */
+  :root {
+    --orange:      #FF9200;
+    --orange-soft: #FFB04A;
+    --orange-tint: #FFF1DC;
+    --pink:        #E71D73;
+    --cyan:        #36A7E1;
+    --green:       #96C13E;
+    --gray:        #797979;
+    --ink:         #0a0a0a;
+    --ink-2:       #2a2a2a;
+    --muted:       #6b6b6b;
+    --line:        #e3e3e3;
+    --line-soft:   #f0f0f0;
+    --paper:       #ffffff;
+    --paper-warm:  #faf7f1;
+    --font-display: "Tw Cen MT", "Twentieth Century", "Barlow", "Futura", "Trebuchet MS", sans-serif;
+    --font-body:    "Tw Cen MT", "Twentieth Century", "Barlow", "Futura", "Trebuchet MS", sans-serif;
+    --font-mono:    "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+    --pad-x: clamp(20px, 6vw, 96px);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 18px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; }
+  img { max-width: 100%; display: block; }
+
+  /* ---------- shared vocabulary ---------- */
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .eyebrow b { color: var(--orange); font-weight: 500; }
+  section { padding: clamp(56px, 9vw, 120px) var(--pad-x); }
+  section.warm { background: var(--paper-warm); }
+  .sec-head { max-width: 900px; margin-bottom: clamp(28px, 4vw, 56px); }
+  .sec-head h2 {
+    font-family: var(--font-display);
+    font-size: clamp(30px, 4.4vw, 54px);
+    line-height: 1.08;
+    font-weight: 700;
+    margin-top: 12px;
+  }
+  .sec-head h2 em { font-style: italic; color: var(--orange); }
+  .sec-head h2 em.cy { color: var(--cyan); }
+  .lede { max-width: 720px; color: var(--ink-2); }
+  .lede + .lede { margin-top: 12px; }
+
+  .card {
+    background: var(--paper-warm);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--orange);
+    padding: 22px 24px;
+  }
+  section.warm .card { background: var(--paper); }
+  .card.cy { border-left-color: var(--cyan); }
+  .card.gn { border-left-color: var(--green); }
+  .card.pk { border-left-color: var(--pink); }
+  .card h3 { font-family: var(--font-display); font-size: 22px; margin-bottom: 8px; }
+  .card p { color: var(--ink-2); font-size: 16.5px; }
+  .card .tag {
+    display: inline-block; margin-top: 14px;
+    font-family: var(--font-mono); font-size: 12px; color: var(--muted);
+    letter-spacing: 0.06em; text-transform: uppercase;
+  }
+
+  .btn {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 14.5px;
+    padding: 12px 22px;
+    border: 1px solid var(--ink);
+    background: var(--ink);
+    color: #fff;
+    text-decoration: none;
+    transition: background .15s, color .15s, border-color .15s;
+  }
+  .btn:hover { background: var(--orange); border-color: var(--orange); color: #fff; }
+  .btn.ghost { background: transparent; color: var(--ink); }
+  .btn.ghost:hover { background: var(--ink); color: #fff; }
+  .btn.primary { background: var(--orange); border-color: var(--orange); color: var(--ink); font-weight: 500; }
+  .btn.primary:hover { background: var(--ink); border-color: var(--ink); color: #fff; }
+  :focus-visible { outline: 3px solid var(--cyan); outline-offset: 2px; }
+
+  .stat-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+  }
+  .stat { background: var(--paper); padding: 20px 22px; }
+  .stat .v {
+    font-family: var(--font-mono);
+    font-size: clamp(24px, 3vw, 34px);
+    color: var(--ink);
+  }
+  .stat .v span { color: var(--orange); }
+  .stat .k {
+    font-family: var(--font-mono);
+    font-size: 12px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.07em; margin-top: 4px;
+  }
+
+  .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 20px; }
+  .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+
+  /* ---------- nav ---------- */
+  nav {
+    position: sticky; top: 0; z-index: 50;
+    display: flex; align-items: center; gap: 26px;
+    padding: 14px var(--pad-x);
+    background: rgba(255,255,255,0.94);
+    backdrop-filter: blur(6px);
+    border-bottom: 1px solid var(--line);
+  }
+  nav .brand {
+    font-family: var(--font-display); font-weight: 700; font-size: 19px;
+    text-decoration: none; margin-right: auto; display: flex; align-items: center; gap: 12px;
+  }
+  nav .brand .dot { width: 11px; height: 11px; background: var(--orange); border-radius: 50%; }
+  nav a.link {
+    font-family: var(--font-mono); font-size: 13.5px;
+    color: var(--muted); text-decoration: none;
+  }
+  nav a.link:hover { color: var(--ink); }
+  nav a.link.dl { color: var(--orange); }
+  @media (max-width: 900px) { nav a.link { display: none; } nav a.link.dl { display: inline; } }
+
+  /* ---------- hero ---------- */
+  header.hero { padding: clamp(48px, 7vw, 90px) var(--pad-x) 0; }
+  .hero .eyebrow { margin-bottom: 18px; }
+  .hero h1 {
+    font-family: var(--font-display);
+    font-size: clamp(42px, 7.2vw, 96px);
+    line-height: 1.02;
+    font-weight: 700;
+    max-width: 1000px;
+  }
+  .hero h1 em { font-style: italic; color: var(--orange); }
+  .hero .lede { font-size: clamp(18px, 1.6vw, 21px); max-width: 760px; margin-top: 22px; }
+  .hero .cta { display: flex; gap: 14px; flex-wrap: wrap; margin: 30px 0 0; }
+
+  /* Signature: the overlay strip. Hex input (cyan line) vs KIM detections
+     (orange dots), the QA app's own visual language. */
+  .overlay-strip {
+    margin-top: clamp(36px, 5vw, 64px);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--orange);
+    background: var(--paper);
+    position: relative;
+  }
+  .overlay-strip svg { display: block; width: 100%; height: clamp(120px, 16vw, 190px); }
+  .overlay-strip .legend {
+    position: absolute; top: 10px; right: 14px;
+    display: flex; gap: 18px;
+    font-family: var(--font-mono); font-size: 12px; color: var(--muted);
+  }
+  .legend i { display: inline-block; width: 18px; height: 3px; background: var(--cyan); vertical-align: middle; margin-right: 6px; }
+  .legend b { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--orange); vertical-align: middle; margin-right: 6px; }
+  .trace-hex {
+    fill: none; stroke: var(--cyan); stroke-width: 2;
+    stroke-dasharray: 2400; stroke-dashoffset: 2400;
+    animation: draw 2.4s ease-out forwards;
+  }
+  .trace-dot { fill: var(--orange); opacity: 0; animation: pop .3s ease-out forwards; }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+  @keyframes pop { to { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .trace-hex { animation: none; stroke-dashoffset: 0; }
+    .trace-dot { animation: none; opacity: 1; }
+  }
+  .hero .stat-row { margin-top: 26px; margin-bottom: clamp(56px, 9vw, 120px); }
+
+  /* ---------- steps ---------- */
+  .step .num {
+    font-family: var(--font-mono); font-size: 12.5px;
+    color: var(--orange); letter-spacing: 0.1em; margin-bottom: 10px;
+  }
+  .step code {
+    font-family: var(--font-mono); font-size: 14px;
+    background: var(--orange-tint); padding: 2px 7px; border-radius: 2px;
+    word-break: break-all;
+  }
+
+  /* ---------- app showcase ---------- */
+  .shot { border: 1px solid var(--line); box-shadow: 0 14px 40px rgba(10,10,10,0.10); }
+  .shot-caption {
+    font-family: var(--font-mono); font-size: 12.5px; color: var(--muted);
+    margin-top: 10px;
+  }
+
+  .quote {
+    border-left: 4px solid var(--cyan);
+    padding: 6px 0 6px 22px;
+    font-family: var(--font-display);
+    font-size: clamp(21px, 2.4vw, 28px);
+    font-style: italic;
+    color: var(--ink-2);
+    max-width: 640px;
+    margin-top: 28px;
+  }
+
+  .reg {
+    margin-top: 34px; padding-top: 20px; border-top: 1px solid var(--line);
+    font-family: var(--font-mono); font-size: 13.5px; color: var(--muted);
+    line-height: 1.7;
+  }
+  .reg b { color: var(--ink-2); font-weight: 500; }
+
+  /* ---------- footer ---------- */
+  footer {
+    background: var(--ink);
+    color: #cfcfcf;
+    padding: clamp(48px, 7vw, 80px) var(--pad-x) 40px;
+    font-size: 15.5px;
+  }
+  footer .cols {
+    display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 32px;
+    max-width: 1200px;
+  }
+  @media (max-width: 860px) { footer .cols { grid-template-columns: 1fr; } }
+  footer h4 {
+    font-family: var(--font-mono); font-size: 12px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.09em; color: var(--orange-soft);
+    margin-bottom: 12px;
+  }
+  footer a { color: #cfcfcf; text-decoration: none; display: block; margin-bottom: 8px; }
+  footer a:hover { color: #fff; }
+  footer .fine {
+    margin-top: 44px; padding-top: 20px; border-top: 1px solid rgba(255,255,255,0.14);
+    font-family: var(--font-mono); font-size: 12.5px; color: #9a9a9a;
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <a class="brand" href="#top"><span class="dot"></span>PRIME Trial</a>
+  <a class="link" href="#challenge">The Challenge</a>
+  <a class="link" href="#kim">KIM Technology</a>
+  <a class="link" href="#trial">The Trial</a>
+  <a class="link" href="#qa">QA Tools</a>
+  <a class="link" href="kv-simulator.html">Simulator</a>
+  <a class="link dl" href="#download">Download</a>
+</nav>
+
+<header class="hero" id="top">
+  <div class="eyebrow">GenesisCare Clinical Trial <b>&middot;</b> ACTRN12625001244493</div>
+  <h1>Precision in <em>every fraction</em></h1>
+  <p class="lede">
+    The PRIME trial brings real-time Kilovoltage Intrafraction Monitoring to prostate
+    radiotherapy across 10 Australian centres, tracking tumour motion with sub-millimetre
+    accuracy while the beam is on.
+  </p>
+  <div class="cta">
+    <a class="btn primary" href="#download">Download the QA app</a>
+    <a class="btn ghost" href="#trial">About the trial</a>
+    <a class="btn ghost" href="kv-simulator.html">Launch simulator</a>
+  </div>
+
+  <div class="overlay-strip" aria-hidden="true">
+    <div class="legend"><span><i></i>Hex (input)</span><span><b></b>KIM</span></div>
+    <svg viewBox="0 0 1200 170" preserveAspectRatio="none">
+      <line x1="0" y1="85" x2="1200" y2="85" stroke="#e3e3e3" stroke-width="1"/>
+      <path class="trace-hex" d="M0,85 C20,45 40,45 60,85 S100,125 120,85 S160,45 180,85 S220,125 240,85 S280,45 300,85 S340,125 360,85 S400,42 420,82 S460,122 480,82 S520,42 540,82 S580,122 600,82 S640,40 660,80 S700,120 720,80 S760,40 780,80 S820,120 840,80 S880,38 900,78 S940,118 960,78 S1000,38 1020,78 S1060,118 1080,78 S1120,38 1140,78 S1180,118 1200,78"/>
+      <g>
+        <circle class="trace-dot" cx="30"   cy="57"  r="4" style="animation-delay:.10s"/>
+        <circle class="trace-dot" cx="90"   cy="113" r="4" style="animation-delay:.20s"/>
+        <circle class="trace-dot" cx="150"  cy="59"  r="4" style="animation-delay:.30s"/>
+        <circle class="trace-dot" cx="210"  cy="111" r="4" style="animation-delay:.40s"/>
+        <circle class="trace-dot" cx="270"  cy="58"  r="4" style="animation-delay:.50s"/>
+        <circle class="trace-dot" cx="330"  cy="112" r="4" style="animation-delay:.60s"/>
+        <circle class="trace-dot" cx="390"  cy="55"  r="4" style="animation-delay:.70s"/>
+        <circle class="trace-dot" cx="450"  cy="109" r="4" style="animation-delay:.80s"/>
+        <circle class="trace-dot" cx="510"  cy="55"  r="4" style="animation-delay:.90s"/>
+        <circle class="trace-dot" cx="570"  cy="109" r="4" style="animation-delay:1.00s"/>
+        <circle class="trace-dot" cx="630"  cy="53"  r="4" style="animation-delay:1.10s"/>
+        <circle class="trace-dot" cx="690"  cy="107" r="4" style="animation-delay:1.20s"/>
+        <circle class="trace-dot" cx="750"  cy="53"  r="4" style="animation-delay:1.30s"/>
+        <circle class="trace-dot" cx="810"  cy="107" r="4" style="animation-delay:1.40s"/>
+        <circle class="trace-dot" cx="870"  cy="51"  r="4" style="animation-delay:1.50s"/>
+        <circle class="trace-dot" cx="930"  cy="105" r="4" style="animation-delay:1.60s"/>
+        <circle class="trace-dot" cx="990"  cy="51"  r="4" style="animation-delay:1.70s"/>
+        <circle class="trace-dot" cx="1050" cy="105" r="4" style="animation-delay:1.80s"/>
+        <circle class="trace-dot" cx="1110" cy="49"  r="4" style="animation-delay:1.90s"/>
+        <circle class="trace-dot" cx="1170" cy="103" r="4" style="animation-delay:2.00s"/>
+      </g>
+    </svg>
+  </div>
+
+  <div class="stat-row">
+    <div class="stat"><div class="v">&lt; 0.5 <span>mm</span></div><div class="k">Tracking accuracy</div></div>
+    <div class="stat"><div class="v">6 <span>DoF</span></div><div class="k">Degrees of freedom</div></div>
+    <div class="stat"><div class="v">300</div><div class="k">Target enrolment</div></div>
+    <div class="stat"><div class="v">10</div><div class="k">Australian centres</div></div>
+  </div>
+</header>
+
+<section class="warm" id="challenge">
+  <div class="sec-head">
+    <div class="eyebrow">Section <b>01</b> &middot; The Challenge</div>
+    <h2>The prostate <em>moves</em> during treatment</h2>
+  </div>
+  <p class="lede">
+    During radiation therapy, the prostate can drift, shift, and rotate due to bladder filling,
+    rectal gas, and patient breathing. In hypofractionated SBRT, where each fraction delivers a
+    high dose over fewer sessions, even millimetre-scale motion can compromise treatment
+    accuracy and increase toxicity to surrounding healthy tissue.
+  </p>
+  <p class="lede">
+    Traditional image guidance captures a snapshot before treatment begins, but the target can
+    move significantly during the minutes of beam delivery. Without real-time monitoring, these
+    intra-fraction motions go undetected and uncorrected.
+  </p>
+  <div class="quote">We need to see the target while the beam is on.</div>
+</section>
+
+<section id="kim">
+  <div class="sec-head">
+    <div class="eyebrow">Section <b>02</b> &middot; The Technology</div>
+    <h2>Kilovoltage <em class="cy">Intrafraction</em> Monitoring</h2>
+  </div>
+  <p class="lede" style="margin-bottom: 36px;">
+    KIM is a real-time image guidance system developed at the
+    <a href="https://image-x.sydney.edu.au/">Image X Institute</a>, University of Sydney. It
+    uses the existing kV imaging hardware on standard linear accelerators to track implanted
+    fiducial markers in real time, with no additional equipment required.
+  </p>
+  <div class="grid-3">
+    <div class="card step">
+      <div class="num">STEP 01</div>
+      <h3>Acquire</h3>
+      <p>The gantry-mounted kV imager continuously captures 2D projection images of implanted
+      gold fiducial markers during beam delivery at 5 to 10 frames per second.</p>
+    </div>
+    <div class="card step cy">
+      <div class="num" style="color: var(--cyan);">STEP 02</div>
+      <h3>Reconstruct</h3>
+      <p>KIM software segments the markers in each frame and reconstructs their 3D positions in
+      six degrees of freedom, three translations and three rotations, using a probability-based
+      matching algorithm.</p>
+    </div>
+    <div class="card step gn">
+      <div class="num" style="color: var(--green);">STEP 03</div>
+      <h3>Adapt</h3>
+      <p>If motion exceeds protocol thresholds (3 mm or more for 5 s or more in PRIME), KIM
+      signals the radiation therapists to pause the beam. A couch correction returns the target
+      to the planned position before treatment resumes.</p>
+    </div>
+  </div>
+</section>
+
+<section class="warm" id="trial">
+  <div class="sec-head">
+    <div class="eyebrow">Section <b>03</b> &middot; The PRIME Trial</div>
+    <h2>Real-time KIM guidance for <em>prostate radiotherapy</em></h2>
+  </div>
+  <p class="lede" style="margin-bottom: 36px;">
+    PRIME is a GenesisCare-sponsored, prospective, single-arm feasibility study assessing
+    real-time kilovoltage intrafraction monitoring and manual gating for prostate radiotherapy
+    in men with prostate adenocarcinoma. Conducted across 10 Australian centres with support
+    from the Image X Institute at the University of Sydney, PRIME brings sub-millimetre
+    intra-fraction tracking from research into routine clinical practice.
+  </p>
+  <div class="grid-2">
+    <div class="card">
+      <h3>Objective</h3>
+      <p>Assess the feasibility of KIM real-time monitoring with manual gating for prostate
+      radiotherapy delivery across multiple centres, evaluating whether the technology can be
+      reliably integrated into routine clinical workflows.</p>
+    </div>
+    <div class="card cy">
+      <h3>Intervention</h3>
+      <p>Patients receive standard-of-care external beam radiotherapy with continuous KIM
+      monitoring at 5 to 10 Hz during beam delivery. KIM tracks three intraprostatic fiducial
+      markers in real time. If prostate motion of 3 mm or more persists for 5 seconds or more,
+      KIM signals the radiation therapists to pause the beam and apply couch corrections before
+      resuming.</p>
+    </div>
+    <div class="card gn">
+      <h3>Primary endpoints</h3>
+      <p>Proportion of fractions successfully delivered with KIM as per protocol (no
+      KIM-related technical failure), and percentage of fractions where total couch time is
+      completed within 25 minutes.</p>
+    </div>
+    <div class="card pk">
+      <h3>AI sub-study</h3>
+      <p>Technical data from the PRIME cohort, kV frames, position logs, plan and structure
+      sets, will be used to train and validate AI-based marker and markerless tracking models
+      developed by Image X Institute.</p>
+    </div>
+  </div>
+  <div class="stat-row" style="margin-top: 20px;">
+    <div class="stat"><div class="v">300</div><div class="k">Target patients</div></div>
+    <div class="stat"><div class="v">10</div><div class="k">Australian sites</div></div>
+    <div class="stat"><div class="v">&ge; 3 <span>mm</span></div><div class="k">Gating threshold</div></div>
+    <div class="stat"><div class="v">5&ndash;10 <span>Hz</span></div><div class="k">Sampling rate</div></div>
+  </div>
+  <div class="reg">
+    Trial registration
+    <a href="https://anzctr.org.au/Trial/Registration/TrialReview.aspx?ACTRN=12625001244493"><b>ANZCTR ACTRN12625001244493</b></a> &middot;
+    Principal Investigator: Dr Mark Sidhom, GenesisCare &middot;
+    Ethics: St Vincent&rsquo;s Hospital Melbourne HREC
+  </div>
+</section>
+
+<section id="qa">
+  <div class="sec-head">
+    <div class="eyebrow">Section <b>04</b> &middot; QA Tools</div>
+    <h2>Open-source <em>quality assurance</em></h2>
+  </div>
+  <p class="lede" style="margin-bottom: 36px;">
+    Each PRIME centre undergoes commissioning and ongoing QA with the tools in this repository.
+    The KIM QA Analysis app compares KIM's real-time tracking against a 6 DoF robotic phantom
+    playing programmed motion traces, and reports the tracking error that decides pass or fail.
+  </p>
+
+  <div class="grid-2" style="align-items: start;">
+    <div>
+      <img class="shot" src="webapp-overlay.png"
+           alt="KIM QA Analysis app: three stacked LR/SI/AP panels overlaying KIM detections on the HexaMotion input trace, with dead-time compression and couch-shift annotations">
+      <div class="shot-caption">
+        An interrupted prostate acquisition: KIM detections on the HexaMotion input trace,
+        dead time compressed, couch correction annotated per axis.
+      </div>
+    </div>
+    <div style="display: grid; gap: 20px;">
+      <div class="card">
+        <h3>Unified overlay analysis</h3>
+        <p>Point the app at a results folder and it discovers every session: static
+        localisation, dynamic motion traces, and interrupted treatments with couch corrections.
+        Auto-aligned overlays, live tracking-error metrics (mean, SD, 5th and 95th percentiles
+        per axis), kV frame preview on hover, and a combined QA summary report.</p>
+        <span class="tag">Windows exe &middot; runs in your browser</span>
+      </div>
+      <div class="card cy">
+        <h3>kV imaging simulator</h3>
+        <p>Interactive browser-based visualisation of kV imaging geometry. Explore
+        depth-dependent magnification, geometric penumbra, and divergent beam physics with
+        adjustable SAD, SID, focal spot, and gantry angle controls.</p>
+        <span class="tag">JavaScript &middot; no install</span>
+        <div style="margin-top: 16px;"><a class="btn ghost" href="kv-simulator.html">Open simulator</a></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="warm" id="download">
+  <div class="sec-head">
+    <div class="eyebrow">Section <b>05</b> &middot; Download &amp; Use</div>
+    <h2>Run the QA app in <em>four steps</em></h2>
+  </div>
+  <div class="grid-2" style="margin-bottom: 24px;">
+    <div class="card step">
+      <div class="num">STEP 01 &middot; DOWNLOAD</div>
+      <h3>Get the latest release</h3>
+      <p>Download <code>KIM-QA-Analysis-Windows.zip</code> from the
+      <a href="https://github.com/kkaan/kim-qa/releases/latest">latest release</a> and extract
+      it anywhere. No installer and no Python required; everything ships inside
+      <code>KIM-QA-Server.exe</code>.</p>
+    </div>
+    <div class="card step">
+      <div class="num">STEP 02 &middot; LAUNCH</div>
+      <h3>Point it at your results</h3>
+      <p>Double-click <code>KIM-QA-Server.exe</code> and pick your results folder in the
+      dialog, or run <code>KIM-QA-Server.exe --root "D:\KIM\2026-06-23"</code> from a terminal.
+      For Varian machines add <code>--vendor Varian</code>. Your browser opens the app
+      automatically.</p>
+    </div>
+    <div class="card step">
+      <div class="num">STEP 03 &middot; ANALYSE</div>
+      <h3>Review each session</h3>
+      <p>Every session folder appears in the sidebar, classified as static, motion, or
+      interrupted. Motion traces auto-match by folder name; fine-tune the time alignment with
+      the offset slider, drag on a panel to select analysis ranges, and hover points to see the
+      kV frame behind each detection.</p>
+    </div>
+    <div class="card step">
+      <div class="num">STEP 04 &middot; SIGN OFF</div>
+      <h3>Save the QA record</h3>
+      <p>Save writes <code>overlay.png</code> into the session folder and regenerates a
+      combined <code>summary.md</code> at the root with per-axis and 3D tracking-error
+      statistics for every reviewed session.</p>
+    </div>
+  </div>
+  <div style="display: flex; gap: 14px; flex-wrap: wrap;">
+    <a class="btn primary" href="https://github.com/kkaan/kim-qa/releases/latest">Download latest release</a>
+    <a class="btn ghost" href="https://github.com/kkaan/kim-qa">Browse the source</a>
+  </div>
+  <div class="reg">
+    The app reads KIM session folders (<b>MarkerLocations_CouchShift_*.txt</b>, optional
+    <b>couchShifts.txt</b> and <b>KIM-KV</b> images) plus, for motion sessions, the HexaMotion
+    trace files in a <b>Motion traces</b> folder beside them.
+  </div>
+</section>
+
+<section id="simulator">
+  <div class="sec-head">
+    <div class="eyebrow">Section <b>06</b> &middot; Interactive</div>
+    <h2>kV imaging <em class="cy">simulator</em></h2>
+  </div>
+  <p class="lede">
+    Explore the physics of kV imaging geometry: depth-dependent magnification, geometric
+    penumbra, and how target motion appears on the detector at different gantry angles.
+  </p>
+  <div style="margin-top: 26px;">
+    <a class="btn" href="kv-simulator.html">Open interactive simulator &rarr;</a>
+  </div>
+</section>
+
+<footer>
+  <div class="cols">
+    <div>
+      <h4>PRIME Trial</h4>
+      <p style="max-width: 380px;">
+        GenesisCare-sponsored multi-centre clinical trial implementing real-time KIM motion
+        management for prostate radiotherapy across Australia.
+      </p>
+    </div>
+    <div>
+      <h4>Trial</h4>
+      <a href="https://anzctr.org.au/Trial/Registration/TrialReview.aspx?ACTRN=12625001244493">ANZCTR registry</a>
+      <a href="https://image-x.sydney.edu.au/kim-2/">KIM at Image X</a>
+      <a href="https://image-x.sydney.edu.au/">Image X Institute</a>
+    </div>
+    <div>
+      <h4>Software</h4>
+      <a href="https://github.com/kkaan/kim-qa">GitHub repository</a>
+      <a href="https://github.com/kkaan/kim-qa/releases/latest">Releases</a>
+      <a href="kv-simulator.html">kV simulator</a>
+    </div>
+    <div>
+      <h4>References</h4>
+      <a href="https://pubmed.ncbi.nlm.nih.gov/28342648/">KIM 6DoF accuracy</a>
+      <a href="https://pubmed.ncbi.nlm.nih.gov/29471970/">First clinical KIM</a>
+      <a href="https://pubmed.ncbi.nlm.nih.gov/31446633/">SPARK trial KIM</a>
+    </div>
+  </div>
+  <div class="fine">
+    KIM QA Analysis. Open-source tools for the PRIME clinical trial. GenesisCare, supported by
+    Image X Institute, University of Sydney.
+  </div>
+</footer>
+
+</body>
+</html>
