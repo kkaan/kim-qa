@@ -1,8 +1,3 @@
-<a href="https://kkaan.github.io/KIM-QA-Analysis/">
-  <img src="docs/landing-page-images/gc-logo-small.jpg" alt="GenesisCare" height="60">
-</a>
-
-### [Visit our landing page for more details on the trial &rarr;](https://kkaan.github.io/KIM-QA-Analysis/)
 
 ---
 
