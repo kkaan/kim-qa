@@ -49,6 +49,30 @@ def test_wipes_stale_output(tmp_path):
     assert (out / "top.md").exists()
 
 
+def test_rename_maps_source_to_public_name(tmp_path):
+    repo = tmp_path / "repo"
+    make_tree(repo)
+    (repo / "docs").mkdir()
+    (repo / "docs" / "readme-public.md").write_text("public")
+    closure = tmp_path / "closure.txt"
+    write_closure(closure, ["docs/readme-public.md -> README.md", "top.md"])
+    out = tmp_path / "out"
+    n = build_mirror(repo, closure, out)
+    assert (out / "README.md").read_text() == "public"
+    assert not (out / "docs" / "readme-public.md").exists()
+    assert n == 2
+
+
+def test_rename_with_multiple_matches_raises(tmp_path):
+    repo = tmp_path / "repo"
+    make_tree(repo)
+    closure = tmp_path / "closure.txt"
+    write_closure(closure, ["src/pkg/** -> flat.py"])
+    with pytest.raises(ClosureError) as e:
+        build_mirror(repo, closure, tmp_path / "out")
+    assert "exactly one" in str(e.value)
+
+
 def test_zero_match_line_raises_naming_line(tmp_path):
     repo = tmp_path / "repo"
     make_tree(repo)
