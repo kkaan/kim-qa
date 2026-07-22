@@ -1,14 +1,18 @@
-"""Readers for KIM MarkerLocations_CouchShift_*.txt trajectory logs.
+"""Readers for KIM MarkerLocations(GA)_CouchShift_*.txt trajectory logs.
 
-The non-GA header has 16 names but data rows have 17 fields (embedded comma in
-the Filename column), so columns are read BY POSITION: cols 1..4 = time, AP,
-LR, SI. Continuation files (_1, _2, ...) typically have no header row; presence
-is sniffed per file (first line starting with "Frame").
+The GA and non-GA variants carry IDENTICAL marker rows (verified to full
+precision on real Bluey data); GA adds the Gantry column and a comma-free
+Filename, the non-GA variant carries tracking diagnostics and a Filename with
+an embedded comma (16 header names vs 17 data fields).
 
-The GA variant mirrors the same rows with a different layout (real files:
-Frame No, Time (sec), Gantry, Marker_0_AP/LR/SI, ...); its Filename has no
-embedded comma, so the Gantry column is resolved BY NAME from the first
-file's header and that index is reused for headerless continuation files.
+The GA files are therefore the canonical position source: marker columns
+(Marker_<n>_AP/LR/SI) and Gantry are resolved BY NAME from the first file's
+header and those indices are reused for headerless continuation files
+(_1, _2, ...; header presence is sniffed per file). When GA files are absent
+or their first file has no parsable header, the reader falls back to the
+non-GA files: by name when the header carries Marker triples, otherwise BY
+POSITION (cols 1..4 = time, AP, LR, SI — safe despite the embedded comma
+because those columns sit left of Filename).
 """
 import re
 from pathlib import Path
@@ -16,7 +20,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-KIM_FILENAME = "MarkerLocations_CouchShift_0.txt"
+KIM_FILENAME = "MarkerLocationsGA_CouchShift_0.txt"
+FALLBACK_KIM_FILENAME = "MarkerLocations_CouchShift_0.txt"
 _SEG_RE = re.compile(r"^MarkerLocations_CouchShift_(\d+)\.txt$")
 _GA_RE = re.compile(r"^MarkerLocationsGA_CouchShift_(\d+)\.txt$")
 _MARKER_COL_RE = re.compile(r"^Marker_(\d+)_(AP|LR|SI)$")
@@ -65,21 +70,26 @@ def _numbered_files(folder: Path, pattern: re.Pattern) -> list[Path]:
 
 
 def read_kim_segments(folder: Path) -> dict:
-    """All MarkerLocations_CouchShift_*.txt in numeric order, concatenated.
+    """All marker-log segments in numeric order, concatenated.
 
-    Multi-marker files (complete Marker_0/1/2 AP/LR/SI column triples in the
-    first file's header) are averaged into a single centroid trajectory, the
-    same reduction the MATLAB scripts applied; the column indices are reused
-    for headerless continuation files. Headers without Marker triples fall
-    back to the positional layout (cols 1..4 = time, AP, LR, SI).
+    GA files are the canonical source (marker columns resolved by name from
+    the first file's header); non-GA files are the fallback when GA files are
+    absent or headerless. Multi-marker files (complete Marker_0/1/2 AP/LR/SI
+    column triples) are averaged into a single centroid trajectory, the same
+    reduction the MATLAB scripts applied; the column indices are reused for
+    headerless continuation files.
 
     Returns dict of numpy arrays: t, lr, si, ap (raw, uncorrected, real
     timebase), int array file_index, and int n_markers.
     """
-    files = _numbered_files(folder, _SEG_RE)
-    if not files:
-        raise FileNotFoundError(f"No {KIM_FILENAME[:-5]}*.txt in {folder}")
-    markers = _marker_columns(files[0])
+    files = _numbered_files(folder, _GA_RE)
+    markers = _marker_columns(files[0]) if files else None
+    if markers is None:
+        files = _numbered_files(folder, _SEG_RE)
+        if not files:
+            raise FileNotFoundError(
+                f"No MarkerLocations(GA)_CouchShift_*.txt in {folder}")
+        markers = _marker_columns(files[0])
     t, lr, si, ap, fi = [], [], [], [], []
     for k, fp in enumerate(files):
         if markers is None:

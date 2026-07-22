@@ -8,6 +8,7 @@ import uvicorn
 
 from .app import create_app
 from .config import ServerConfig
+from .state import load_vendor
 
 
 def parse_args(argv=None):
@@ -19,7 +20,9 @@ def parse_args(argv=None):
                         "Omit to pick via folder dialog.")
     p.add_argument("--traces-root", default=None,
                    help="Hexamotion traces root (default: <root>/Motion traces)")
-    p.add_argument("--vendor", choices=["Elekta", "Varian"], default="Elekta")
+    p.add_argument("--vendor", choices=["Elekta", "Varian"], default=None,
+                   help="Machine vendor (default: last one saved for this "
+                        "root, else Elekta)")
     p.add_argument("--port", type=int, default=0,
                    help="Port (default: pick a free one)")
     p.add_argument("--no-browser", action="store_true")
@@ -48,8 +51,10 @@ def main(argv=None) -> int:
     if not root:
         print("No results root selected; exiting.")
         return 1
+    # Vendor resolution: explicit flag > persisted per-root choice > Elekta.
+    vendor = args.vendor or load_vendor(root) or "Elekta"
     config = ServerConfig(root=root, traces_root=args.traces_root,
-                          vendor=args.vendor)
+                          vendor=vendor)
     app = create_app(config)
     port = args.port or _free_port()
     url = f"http://127.0.0.1:{port}/"

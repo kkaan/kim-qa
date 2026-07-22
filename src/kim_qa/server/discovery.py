@@ -1,16 +1,19 @@
 """Session discovery and static/motion classification.
 
 A folder under the results root is a session when it contains
-MarkerLocations_CouchShift_0.txt (searched one level deep, as some sessions
-nest it). Name-substring matching against PAIR_MAP assigns the hexamotion
-ground-truth trace; anything unmatched is static (flat-zero ground truth).
+MarkerLocationsGA_CouchShift_0.txt (or the non-GA fallback; searched
+recursively, as some sessions nest it). Name-substring matching against
+PAIR_MAP assigns the hexamotion ground-truth trace; anything unmatched is
+static (flat-zero ground truth).
 """
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 from kim_qa.io.centroid import parse_centroid_file
-from kim_qa.io.marker_locations import KIM_FILENAME, read_kim_segments
+from kim_qa.io.marker_locations import (
+    FALLBACK_KIM_FILENAME, KIM_FILENAME, read_kim_segments,
+)
 from .config import ServerConfig
 
 # (folder-name substrings, trace filename). First match wins; substrings are
@@ -121,12 +124,17 @@ def discover_sessions(config: ServerConfig,
             continue
         if folder == config.traces_root:
             continue
-        kim_file = folder / KIM_FILENAME
-        if not kim_file.exists():
-            nested = list(folder.rglob(KIM_FILENAME))
-            if not nested:
-                continue
-            kim_file = nested[0]
+        kim_file = None
+        for name in (KIM_FILENAME, FALLBACK_KIM_FILENAME):
+            if (folder / name).exists():
+                kim_file = folder / name
+                break
+            nested = sorted(folder.rglob(name))
+            if nested:
+                kim_file = nested[0]
+                break
+        if kim_file is None:
+            continue
         kind, hex_path = _classify(folder.name, config.traces_root,
                                    overrides.get(folder.name))
         sess = Session(

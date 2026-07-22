@@ -4,6 +4,10 @@ State schema, one entry per session id:
     {"offset": float, "ranges": [[lo, hi], ...], "y_range": float | None,
      "hex_override": str | None, "offset_origin": str}
 Unknown keys written by other tools are preserved on update.
+
+A reserved top-level "_config" entry holds per-root settings, currently
+{"vendor": "Elekta" | "Varian"}. Session ids are folder names and discovery
+skips "_"-prefixed folders, so the key can never collide with a session.
 """
 import json
 from pathlib import Path
@@ -11,11 +15,13 @@ from pathlib import Path
 import numpy as np
 
 from kim_qa.metrics import overlay_metrics_table, overlay_residuals
+from .config import VENDORS
 from .discovery import Session
 from .payloads import build_overlay_payload, expected_centroid
 
 STATE_FILENAME = "_overlay_state.json"
 SUMMARY_FILENAME = "summary.md"
+CONFIG_KEY = "_config"
 
 
 def load_state(root: Path) -> dict:
@@ -36,6 +42,16 @@ def update_entry(root: Path, session_id: str, entry: dict) -> dict:
     (Path(root) / STATE_FILENAME).write_text(
         json.dumps(state, indent=2), encoding="utf-8")
     return state
+
+
+def load_vendor(root: Path) -> str | None:
+    cfg = load_state(root).get(CONFIG_KEY)
+    vendor = cfg.get("vendor") if isinstance(cfg, dict) else None
+    return vendor if vendor in VENDORS else None
+
+
+def save_vendor(root: Path, vendor: str) -> None:
+    update_entry(root, CONFIG_KEY, {"vendor": vendor})
 
 
 def _payload_metrics(payload: dict, entry: dict):

@@ -1,10 +1,8 @@
-"""Assemble OverlayPayload / CouchShiftPayload JSON dicts from live files.
+"""Assemble OverlayPayload JSON dicts from live files.
 
 Overlay payloads keep the RAW timebase (no Python gap compression): display
 compression is the widget's job, so a single slider offset aligns all
-acquisition segments to a continuously-running hex trace. Couch-steps payloads
-use the gap-compressed timebase (matching tools/export_overlay_to_webapp.py):
-that view has no hex alignment.
+acquisition segments to a continuously-running hex trace.
 """
 from pathlib import Path
 
@@ -136,71 +134,3 @@ def build_overlay_payload(session: Session, vendor: str,
     if hex_data is not None:
         payload["hex"] = hex_data
     return payload
-
-
-def compress_gaps(t_real, gap_threshold=5.0, compressed_gap=3.0):
-    """Compress time gaps larger than gap_threshold to compressed_gap seconds.
-    Returns (t_compressed, marker_positions). Port of the interactive tool."""
-    t_real = np.asarray(t_real, dtype=float)
-    n = len(t_real)
-    if n == 0:
-        return t_real.copy(), []
-    t_out = np.empty(n)
-    t_out[0] = t_real[0]
-    for i in range(1, n):
-        dt = t_real[i] - t_real[i - 1]
-        t_out[i] = t_out[i - 1] + (compressed_gap if dt > gap_threshold else dt)
-    t_out = t_out - t_out[0]
-    markers = [float((t_out[i] + t_out[i - 1]) / 2.0)
-               for i in range(1, n)
-               if t_real[i] - t_real[i - 1] > gap_threshold]
-    return t_out, markers
-
-
-def build_couch_steps_payload(session: Session, vendor: str,
-                              state_entry: dict | None) -> dict:
-    """Couch-shift-uncorrected (but centroid-corrected) positions on a
-    gap-compressed timebase + expected step levels per segment. Port of
-    export_overlay_to_webapp.build_couch_shift."""
-    folder = session.kim_file.parent
-    couch = folder / "couchShifts.txt"
-    if not couch.exists():
-        raise ValueError(f"{session.id} has no couchShifts.txt")
-    shifts = parse_couch_shifts(couch, vendor=vendor)
-    segs = read_kim_segments(folder)
-    cent = expected_centroid(session)
-    kim_lr = segs["lr"] - cent["lr"]
-    kim_si = segs["si"] - cent["si"]
-    kim_ap = segs["ap"] - cent["ap"]
-    t_disp, markers = compress_gaps(segs["t"])
-    fi = segs["file_index"].astype(int)
-    n_segs = int(fi.max()) + 1
-
-    cum = np.zeros((n_segs, 3))                     # columns lr, si, ap
-    for i, sh in enumerate(shifts[: n_segs - 1]):
-        cum[i + 1] = cum[i] + np.array([sh["lr"], sh["si"], sh["ap"]])
-    seg0 = fi == 0
-    base = np.array([float(np.mean(kim_lr[seg0])),
-                     float(np.mean(kim_si[seg0])),
-                     float(np.mean(kim_ap[seg0]))])
-    expected = base + cum
-
-    bounds = [[float(np.min(t_disp[fi == k])), float(np.max(t_disp[fi == k]))]
-              for k in range(n_segs)]
-    return {
-        "id": f"{session.id}__couchshift",
-        "kind": "couch_shift",
-        "saved_ranges": [[float(lo), float(hi)]
-                         for lo, hi in (state_entry or {}).get("ranges", [])],
-        "kim": {"t": _r4(t_disp), "lr": _r4(kim_lr),
-                "si": _r4(kim_si), "ap": _r4(kim_ap)},
-        "file_index": [int(x) for x in fi],
-        "shifts": [[round(float(s["lr"]), ROUND_DP),
-                    round(float(s["si"]), ROUND_DP),
-                    round(float(s["ap"]), ROUND_DP)] for s in shifts],
-        "expected_steps": [[round(float(a), ROUND_DP) for a in row]
-                           for row in expected],
-        "segment_bounds": [[round(lo, ROUND_DP), round(hi, ROUND_DP)]
-                           for lo, hi in bounds],
-        "shift_markers": [round(float(m), ROUND_DP) for m in markers],
-    }

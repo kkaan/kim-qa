@@ -12,8 +12,8 @@ from pydantic import BaseModel
 from .config import ServerConfig
 from .discovery import discover_sessions, list_traces
 from .frames import build_frame_index, render_frame_png
-from .payloads import build_couch_steps_payload, build_overlay_payload
-from .state import load_state, regenerate_summary, update_entry
+from .payloads import build_overlay_payload
+from .state import load_state, regenerate_summary, save_vendor, update_entry
 
 
 class ConfigUpdate(BaseModel):
@@ -80,6 +80,7 @@ def create_app(config: ServerConfig) -> FastAPI:
     @app.post("/api/config")
     def post_config(update: ConfigUpdate):
         config.vendor = update.vendor
+        save_vendor(config.root, update.vendor)
         app.state.cache.clear()
         return get_config()
 
@@ -117,18 +118,6 @@ def create_app(config: ServerConfig) -> FastAPI:
         if key not in app.state.cache:
             entry = load_state(config.root).get(exp_id)
             app.state.cache[key] = build_overlay_payload(
-                sess, config.vendor, entry)
-        return app.state.cache[key]
-
-    @app.get("/api/experiments/{exp_id}/couch-steps")
-    def couch_steps(exp_id: str):
-        sess = get_session(exp_id)
-        if not sess.has_couch_shifts:
-            raise HTTPException(404, f"{exp_id} has no couchShifts.txt")
-        key = (config.vendor, "couch", exp_id)
-        if key not in app.state.cache:
-            entry = load_state(config.root).get(exp_id)
-            app.state.cache[key] = build_couch_steps_payload(
                 sess, config.vendor, entry)
         return app.state.cache[key]
 

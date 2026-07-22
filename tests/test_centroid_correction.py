@@ -2,8 +2,8 @@
 
 Covers: discovery error when no centroid file exists, session-local file
 winning over a root-level one, root-level fallback, the expected-offset
-subtraction in overlay and couch-steps payloads, and multi-marker KIM logs
-averaged into a centroid trajectory.
+subtraction in overlay payloads, and multi-marker KIM logs averaged into a
+centroid trajectory.
 
 Run:  uv run pytest tests/test_centroid_correction.py
 """
@@ -15,13 +15,13 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fixtures import (  # noqa: E402
-    make_static_session, write_centroid_file, write_kim_file,
+    make_static_session, write_centroid_file,
 )
 from kim_qa.io.marker_locations import read_kim_segments  # noqa: E402
 from kim_qa.server.config import ServerConfig  # noqa: E402
 from kim_qa.server.discovery import discover_sessions, find_centroid_file  # noqa: E402
 from kim_qa.server.payloads import (  # noqa: E402
-    build_couch_steps_payload, build_overlay_payload, expected_centroid,
+    build_overlay_payload, expected_centroid,
 )
 
 # seeds avg (2,4,6) cm - iso (1,1,1) cm = (1,3,5) cm -> *10, axis swap:
@@ -78,19 +78,6 @@ def test_overlay_payload_subtracts_expected(tmp_path):
     assert abs(payload["kim"]["ap"][0] - (0.05 - EXPECTED["ap"])) < 1e-6
     assert payload["centroid"]["file"] == "Phantom_Centroid.txt"
     assert abs(payload["centroid"]["si"] - EXPECTED["si"]) < 1e-6
-
-
-def test_couch_steps_payload_subtracts_expected(tmp_path):
-    from fixtures import make_interrupt_session
-    sess_dir = make_interrupt_session(tmp_path)
-    write_centroid_file(sess_dir / "Phantom_Centroid.txt",
-                        seeds=SEEDS_2, iso=ISO)
-    sess = discover_sessions(ServerConfig(root=tmp_path))[0]
-    payload = build_couch_steps_payload(sess, "Elekta", None)
-    # segment-0 fixture values: lr = 0.1 raw
-    assert abs(payload["kim"]["lr"][0] - (0.1 - EXPECTED["lr"])) < 1e-6
-    # expected step level for segment 0 = corrected segment-0 mean
-    assert abs(payload["expected_steps"][0][0] - (0.1 - EXPECTED["lr"])) < 1e-6
 
 
 MULTI_HEADER = (

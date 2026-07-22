@@ -21,7 +21,8 @@ KIM-QA-Server.exe --root "D:\KIM\2026-06-23"
 ```
 
 Omit `--root` to pick the folder from a dialog. Add `--vendor Varian` for Varian
-machines (flips the vertical-to-AP couch-shift sign; default Elekta).
+machines (flips the vertical-to-AP couch-shift sign; default Elekta). The vendor
+choice persists per results root, so the flag can be omitted on later runs.
 
 ## Run from source
 

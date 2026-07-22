@@ -121,6 +121,9 @@ export default function KimOverlay({ entry, traces, onToast, onStateSaved }: Pro
         setPayload(data);
         setOffset(data.saved_offset ?? 0);
         setRanges((data.saved_ranges ?? []).map((r) => [r[0], r[1]] as Range));
+        // Interrupt sessions show the shift-removed trace by default so each
+        // couch step and its effect is visible; the toggle can still hide it.
+        setShowGhost((data.shift_events?.length ?? 0) > 0);
       })
       .catch((e) => !cancelled && setError(String(e)));
     return () => { cancelled = true; };
@@ -189,17 +192,21 @@ export default function KimOverlay({ entry, traces, onToast, onStateSaved }: Pro
       [...kimX].sort((a, b) => a - b), COMPRESS_MIN_GAP, COMPRESS_KEEP);
   }, [payload, offset]);
 
-  // Default view: from just before the first KIM point to 5 s past the last,
-  // at the saved offset, so we frame the acquired window rather than the full
-  // hex trace. Anchored to saved_offset (not the live slider) so the value is
-  // stable across renders; combined with layout.uirevision this sets the
-  // initial range while still letting the user's own zoom and pan persist.
+  // Default view: from just before the first KIM point to 5 s past the last
+  // (at the saved offset), extended to the end of the hex trace on motion
+  // sessions so the ground truth visibly runs to completion rather than
+  // stopping at the last KIM point. Anchored to saved_offset (not the live
+  // slider) so the value is stable across renders; combined with
+  // layout.uirevision this sets the initial range while still letting the
+  // user's own zoom and pan persist.
   const defaultXRange = useMemo<[number, number] | undefined>(() => {
     if (!payload || payload.kim.t.length === 0) return undefined;
     const off = payload.saved_offset ?? 0;
     let lo = Infinity, hi = -Infinity;
     for (const t of payload.kim.t) { if (t < lo) lo = t; if (t > hi) hi = t; }
-    return [lo + off - 1, hi + off + 5];
+    const hexEnd = payload.kind === 'motion' && payload.hex
+      ? payload.hex.n * payload.hex.dt : -Infinity;
+    return [lo + off - 1, Math.max(hi + off + 5, hexEnd)];
   }, [payload]);
 
   const figure = useMemo(() => {
@@ -211,7 +218,24 @@ export default function KimOverlay({ entry, traces, onToast, onStateSaved }: Pro
     // shifted plot-time collapses to COMPRESS_KEEP seconds.
     const { map: squash, bands } = squashInfo;
     const kimXd = kimX.map(squash);
-    const hexX = hex.t.map(squash);
+
+    // The hexamotion holds its final position once the trace file ends
+    // (verified on Bluey interrupt data: hold-last fits the post-trace KIM
+    // tail at 0.42 mm RMSE vs 4.3 mm for looping), so draw the line flat to
+    // the end of the acquisition instead of stopping at the file end.
+    // Metrics need no change: interp() clamps to the endpoints = same hold.
+    const hexEndT = hex.t.length ? hex.t[hex.t.length - 1] : -Infinity;
+    const kimTrueMax = kimX.length ? Math.max(...kimX) : -Infinity;
+    const holdTo = Math.max(hexEndT, kimTrueMax + 5);
+    const held = holdTo > hexEndT;
+    const hexX = (held ? [...hex.t, holdTo] : hex.t).map(squash);
+    const hexY = held
+      ? {
+          lr: [...hex.lr, hex.lr[hex.lr.length - 1]],
+          si: [...hex.si, hex.si[hex.si.length - 1]],
+          ap: [...hex.ap, hex.ap[hex.ap.length - 1]],
+        }
+      : hex;
 
     // Match each compressed band to its couch shift event. The event's resume
     // point (t_after) sits at the file boundary just before the dead-time gap,
@@ -249,11 +273,18 @@ export default function KimOverlay({ entry, traces, onToast, onStateSaved }: Pro
       });
     }
 
-    const ghostByAxis = showGhost && events.length
+    // Orange primary = KIM as recorded (the quantity the metrics describe);
+    // segment 0 falls back to the corrected values, where the two coincide.
+    // Translucent grey = shift-removed counterfactual (where the target would
+    // have been had the couch not moved). Hex stays the raw input trace.
+    const recByAxis = events.length
       ? {
-          lr: asRecorded(kim.lr, payload.file_index, events, 'lr'),
-          si: asRecorded(kim.si, payload.file_index, events, 'si'),
-          ap: asRecorded(kim.ap, payload.file_index, events, 'ap'),
+          lr: asRecorded(kim.lr, payload.file_index, events, 'lr')
+            .map((v, j) => v ?? kim.lr[j]),
+          si: asRecorded(kim.si, payload.file_index, events, 'si')
+            .map((v, j) => v ?? kim.si[j]),
+          ap: asRecorded(kim.ap, payload.file_index, events, 'ap')
+            .map((v, j) => v ?? kim.ap[j]),
         }
       : null;
 
@@ -271,23 +302,26 @@ export default function KimOverlay({ entry, traces, onToast, onStateSaved }: Pro
         });
       } else {
         data.push({
-          ...ax, x: hexX, y: hex[key], type: 'scatter', mode: 'lines',
+          ...ax, x: hexX, y: hexY[key], type: 'scatter', mode: 'lines',
           name: 'Hex (input)', legendgroup: 'hex', showlegend: first,
           line: { color: colors.cyan, width: 1.4 }, hoverinfo: 'skip',
         });
         data.push({
-          ...ax, x: kimXd, y: kim[key], customdata: cdata, type: 'scatter',
-          mode: 'markers', name: 'KIM (shift-removed)', legendgroup: 'kim',
+          ...ax, x: kimXd, y: recByAxis ? recByAxis[key] : kim[key],
+          customdata: cdata, type: 'scatter',
+          mode: 'markers',
+          name: recByAxis ? 'KIM (as recorded)' : 'KIM (shift-removed)',
+          legendgroup: 'kim',
           showlegend: first, marker: { color: colors.orange, size: 4 },
           ...kimHoverProps,
         });
-        if (ghostByAxis) {
+        if (showGhost && recByAxis) {
           data.push({
-            ...ax, x: kimXd, y: ghostByAxis[key], type: 'scatter',
-            mode: 'markers', name: 'KIM (as recorded)', legendgroup: 'ghost',
+            ...ax, x: kimXd, y: kim[key], type: 'scatter',
+            mode: 'markers', name: 'KIM (shift-removed)', legendgroup: 'ghost',
             showlegend: first,
-            marker: { color: colors.orange, size: 4, symbol: 'circle-open', opacity: 0.35 },
-            hovertemplate: 'as recorded: %{y:.3f} mm<extra></extra>',
+            marker: { color: colors.gray, size: 4, opacity: 0.4 },
+            hovertemplate: 'shift-removed: %{y:.3f} mm<extra></extra>',
           });
         }
       }
@@ -632,7 +666,7 @@ export default function KimOverlay({ entry, traces, onToast, onStateSaved }: Pro
         {(payload.shift_events?.length ?? 0) > 0 && (
           <button type="button" onClick={() => setShowGhost((v) => !v)}
             style={{ ...btnStyle, background: showGhost ? 'var(--gray)' : '#fff', color: showGhost ? '#fff' : 'var(--ink-2)' }}>
-            {showGhost ? 'Hide as-recorded' : 'Show as-recorded'}
+            {showGhost ? 'Hide shift-removed' : 'Show shift-removed'}
           </button>
         )}
         <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--muted)', fontSize: 13 }}>

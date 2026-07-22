@@ -1,9 +1,8 @@
-import pytest
 import numpy as np
 
 from kim_qa.server.config import ServerConfig
 from kim_qa.server.discovery import discover_sessions
-from kim_qa.server.payloads import build_overlay_payload, build_couch_steps_payload, read_hex, compress_gaps
+from kim_qa.server.payloads import build_overlay_payload, read_hex
 from tests.fixtures import (
     make_interrupt_session, make_motion_session, make_static_session,
     write_hex_trace,
@@ -84,30 +83,3 @@ def test_read_hex(tmp_path):
     h = read_hex(path)
     assert h["n"] == 100 and np.isclose(h["dt"], 0.02)
     assert len(h["si"]) == 100
-
-
-def test_couch_steps_payload(tmp_path):
-    make_interrupt_session(tmp_path)
-    cfg = ServerConfig(root=tmp_path)
-    sess = {s.id: s for s in discover_sessions(cfg)}[
-        "Prostate-Continuous-interrupt,Test_1350"]
-    p = build_couch_steps_payload(sess, "Elekta", None)
-    assert p["kind"] == "couch_shift"
-    assert p["id"].endswith("__couchshift")
-    # Gap-compressed timebase: the 51 s dead gap becomes 3 s
-    t = p["kim"]["t"]
-    assert np.isclose(t[10] - t[9], 3.0)
-    # Values stay RAW (uncorrected): segment 1 keeps the +shift levels
-    assert np.isclose(p["kim"]["si"][10], 2.2 + 1.2, atol=1e-6)
-    # expected step for segment 1 = segment-0 mean + shift
-    seg0_si_mean = float(np.mean(p["kim"]["si"][:10]))
-    assert np.isclose(p["expected_steps"][1][1], seg0_si_mean + 1.2, atol=1e-6)
-    assert len(p["segment_bounds"]) == 2
-    assert len(p["shift_markers"]) == 1
-    assert p["shifts"] == [[0.3, 1.2, 1.7]]
-
-
-def test_couch_steps_requires_couch_file(tmp_path):
-    cfg, sessions = get_session(tmp_path, make_static_session)
-    with pytest.raises(ValueError):
-        build_couch_steps_payload(sessions["Static,Test_1207"], "Elekta", None)

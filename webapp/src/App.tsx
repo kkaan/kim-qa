@@ -3,7 +3,6 @@ import {
   AppConfig, AppManifest, ManifestEntry, fetchConfig, fetchManifest, postVendor,
 } from './api';
 import KimOverlay from './widgets/KimOverlay';
-import CouchSteps from './widgets/CouchSteps';
 
 const KIND_COLORS: Record<string, string> = {
   motion: 'var(--cyan)', static: 'var(--gray)',
@@ -13,7 +12,6 @@ export default function App() {
   const [manifest, setManifest] = useState<AppManifest | null>(null);
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
-  const [view, setView] = useState<'overlay' | 'couch'>('overlay');
   const [toast, setToast] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -65,7 +63,7 @@ export default function App() {
         </div>
         {manifest.experiments.map((e) => (
           <SidebarRow key={e.id} entry={e} active={e.id === selected}
-            onClick={() => { setSelected(e.id); setView('overlay'); }} />
+            onClick={() => setSelected(e.id)} />
         ))}
       </aside>
 
@@ -108,25 +106,10 @@ export default function App() {
               {entry.centroid_file ? ` · centroid: ${entry.centroid_file}` : ''}
               {entry.has_couch_shifts ? ' · couch shifts present' : ''}
             </div>
-            {entry.has_couch_shifts && (
-              <div style={{ marginBottom: 10, display: 'flex', gap: 6 }}>
-                {(['overlay', 'couch'] as const).map((v) => (
-                  <button key={v} type="button" onClick={() => setView(v)}
-                    style={{
-                      fontFamily: 'var(--font-mono)', fontSize: 13, padding: '6px 12px',
-                      border: '1px solid var(--line)', cursor: 'pointer', borderRadius: 2,
-                      background: view === v ? 'var(--orange)' : '#fff',
-                      color: view === v ? '#fff' : 'var(--ink-2)',
-                    }}>
-                    {v === 'overlay' ? 'Overlay' : 'Couch steps'}
-                  </button>
-                ))}
-              </div>
-            )}
-            {view === 'overlay'
-              ? <KimOverlay key={entry.id} entry={entry} traces={manifest.traces}
-                  onToast={setToast} onStateSaved={reload} />
-              : <CouchSteps key={`${entry.id}-couch`} entry={entry} />}
+            {/* Key includes the vendor so a vendor switch remounts and refetches
+                the open session with re-signed couch corrections. */}
+            <KimOverlay key={`${entry.id}:${config.vendor}`} entry={entry} traces={manifest.traces}
+              onToast={setToast} onStateSaved={reload} />
           </>
         )}
 

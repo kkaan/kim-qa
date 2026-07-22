@@ -32,6 +32,37 @@ def test_post_config_vendor(tmp_path):
     r = client.post("/api/config", json={"vendor": "Varian"})
     assert r.status_code == 200
     assert client.get("/api/config").json()["vendor"] == "Varian"
+    # Choice persists per root, under the reserved _config state key
+    assert load_state(tmp_path)["_config"]["vendor"] == "Varian"
+
+
+def test_vendor_persists_across_restart(tmp_path):
+    client = full_client(tmp_path)
+    client.post("/api/config", json={"vendor": "Varian"})
+    # _config never leaks into the manifest as an experiment
+    ids = {e["id"] for e in client.get("/api/manifest").json()["experiments"]}
+    assert "_config" not in ids
+
+    from kim_qa.server.state import load_vendor
+    assert load_vendor(tmp_path) == "Varian"
+
+    # Resolution order used by __main__: flag > persisted > Elekta
+    def resolve(flag):
+        return flag or load_vendor(tmp_path) or "Elekta"
+    assert resolve("Elekta") == "Elekta"    # explicit flag wins
+    assert resolve(None) == "Varian"        # persisted choice picked up
+
+
+def test_load_vendor_tolerates_missing_or_junk(tmp_path):
+    from kim_qa.server.state import load_vendor, save_vendor
+    assert load_vendor(tmp_path) is None                       # no state file
+    (tmp_path / "_overlay_state.json").write_text("not json", encoding="utf-8")
+    assert load_vendor(tmp_path) is None                       # corrupt file
+    (tmp_path / "_overlay_state.json").write_text(
+        '{"_config": {"vendor": "Siemens"}}', encoding="utf-8")
+    assert load_vendor(tmp_path) is None                       # unknown vendor
+    save_vendor(tmp_path, "Elekta")
+    assert load_vendor(tmp_path) == "Elekta"
 
 
 def test_post_config_rejects_unknown_vendor(tmp_path):
@@ -62,16 +93,11 @@ def test_manifest(tmp_path):
     assert "t_Lung_Typical.txt" in body["traces"]
 
 
-def test_payload_and_couch_steps_roundtrip(tmp_path):
+def test_payload_roundtrip(tmp_path):
     client = full_client(tmp_path)
     r = client.get(f"/api/experiments/{quote(INTERRUPT_ID)}/payload")
     assert r.status_code == 200
     assert len(r.json()["shift_events"]) == 1
-    r2 = client.get(f"/api/experiments/{quote(INTERRUPT_ID)}/couch-steps")
-    assert r2.status_code == 200
-    assert r2.json()["kind"] == "couch_shift"
-    r3 = client.get(f"/api/experiments/{quote(MOTION_ID)}/couch-steps")
-    assert r3.status_code == 404
     assert client.get("/api/experiments/nope/payload").status_code == 404
 
 
@@ -111,4 +137,4 @@ def test_cli_parse_args():
     ns = parse_args(["--root", "C:/data", "--vendor", "Varian", "--port", "9000"])
     assert ns.root == "C:/data" and ns.vendor == "Varian" and ns.port == 9000
     ns2 = parse_args([])
-    assert ns2.root is None and ns2.vendor == "Elekta" and ns2.port == 0
+    assert ns2.root is None and ns2.vendor is None and ns2.port == 0

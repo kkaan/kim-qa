@@ -1,5 +1,5 @@
 // Typed client for the kim_qa.server API.
-import type { CouchShiftPayload, OverlayPayload, Range } from './lib';
+import type { OverlayPayload, Range } from './lib';
 
 export type ShiftEvent = { t_after: number; lr: number; si: number; ap: number };
 
@@ -67,8 +67,6 @@ export const postVendor = (vendor: 'Elekta' | 'Varian') =>
   post<AppConfig>('/api/config', { vendor });
 export const fetchPayload = (id: string) =>
   get<ServerPayload>(`/api/experiments/${eid(id)}/payload`);
-export const fetchCouchSteps = (id: string) =>
-  get<CouchShiftPayload>(`/api/experiments/${eid(id)}/couch-steps`);
 export const postState = (id: string, body: StateBody) =>
   post<Record<string, unknown>>(`/api/experiments/${eid(id)}/state`, body);
 export const postSave = (id: string, body: StateBody & { png_base64: string }) =>
