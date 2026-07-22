@@ -207,6 +207,14 @@
   }
 
   /* ---------- inputs reference ---------- */
+  pre.tree {
+    font-family: var(--font-mono); font-size: 13.5px; line-height: 1.65;
+    color: var(--ink-2); background: var(--paper-warm);
+    border: 1px solid var(--line); border-left: 4px solid var(--cyan);
+    padding: 18px 22px; margin-bottom: 28px; overflow-x: auto;
+  }
+  pre.tree b { color: var(--ink); }
+  pre.tree i { font-style: normal; color: var(--muted); }
   .io-table { border: 1px solid var(--line); }
   .io-row {
     display: grid; grid-template-columns: minmax(200px, 260px) 1fr;
@@ -276,7 +284,7 @@
     whether a session passes.
   </p>
   <div class="cta">
-    <a class="btn primary" href="#download">Download the app</a>
+    <a class="btn primary" href="https://github.com/kkaan/kim-qa/releases/latest/download/KIM-QA-Analysis-Windows.zip">Download the app</a>
     <a class="btn ghost" href="#method">How it works</a>
     <a class="btn ghost" href="https://github.com/kkaan/kim-qa">Source</a>
   </div>
@@ -367,8 +375,11 @@
 
   <div class="grid-2" style="align-items: start;">
     <div>
-      <img class="shot" src="webapp-overlay.png"
-           alt="KIM QA Analysis app: three stacked LR/SI/AP panels overlaying KIM detections on the HexaMotion input trace, with dead-time compression and couch-shift annotations">
+      <a href="https://github.com/kkaan/kim-qa/releases/latest/download/KIM-QA-Analysis-Windows.zip"
+         title="Download KIM-QA-Analysis-Windows.zip">
+        <img class="shot" src="webapp-overlay.png"
+             alt="KIM QA Analysis app: three stacked LR/SI/AP panels overlaying KIM detections on the HexaMotion input trace, with dead-time compression and couch-shift annotations">
+      </a>
       <div class="shot-caption">
         An interrupted acquisition: KIM detections on the HexaMotion trace, dead time
         compressed, couch correction annotated per axis.
@@ -408,8 +419,8 @@
     <div class="card step">
       <div class="num">STEP 01 &middot; DOWNLOAD</div>
       <h3>Get the latest release</h3>
-      <p>Download <code>KIM-QA-Analysis-Windows.zip</code> from the
-      <a href="https://github.com/kkaan/kim-qa/releases/latest">latest release</a> and extract
+      <p>Download <a href="https://github.com/kkaan/kim-qa/releases/latest/download/KIM-QA-Analysis-Windows.zip"><code>KIM-QA-Analysis-Windows.zip</code></a>
+      (<a href="https://github.com/kkaan/kim-qa/releases/latest">release notes</a>) and extract
       it anywhere. Everything ships inside <code>KIM-QA-Server.exe</code>; no installer, no
       Python.</p>
     </div>
@@ -437,7 +448,7 @@
     </div>
   </div>
   <div style="display: flex; gap: 14px; flex-wrap: wrap;">
-    <a class="btn primary" href="https://github.com/kkaan/kim-qa/releases/latest">Download latest release</a>
+    <a class="btn primary" href="https://github.com/kkaan/kim-qa/releases/latest/download/KIM-QA-Analysis-Windows.zip">Download latest release</a>
     <a class="btn ghost" href="https://github.com/kkaan/kim-qa">Browse the source</a>
   </div>
 </section>
@@ -448,9 +459,26 @@
     <h2>What the app <em class="cy">reads</em></h2>
   </div>
   <p class="lede" style="margin-bottom: 36px;">
-    The app parses standard KIM session folders live; nothing needs pre-processing. A session is
-    a folder of KIM trajectory files, optionally alongside couch shifts and kV images. Motion
-    sessions also need the robot trace they were run against.
+    The app parses standard KIM session folders live; nothing needs pre-processing. Point it at
+    one results root containing a folder per session, with the ground-truth traces in a
+    <code>Motion traces</code> folder alongside them:
+  </p>
+  <pre class="tree">
+<b>D:\KIM\2026-06-23\</b>                          <i>&larr; the results root you pick at launch</i>
+&#9500;&#9472; <b>Motion traces\</b>                           <i>&larr; ground-truth traces (any nesting inside)</i>
+&#9474;  &#9492;&#9472; hexamotion-prostate\t_Prostate_Continuous_Drift.txt
+&#9500;&#9472; <b>Prostate-Continuous-interrupt, ...\</b>      <i>&larr; one folder per session; the name picks the trace</i>
+&#9474;  &#9500;&#9472; MarkerLocations_CouchShift_0.txt     <i>required (_1, _2, ... after each interrupt)</i>
+&#9474;  &#9500;&#9472; MarkerLocationsGA_CouchShift_0.txt   <i>gantry-angle log (one per segment)</i>
+&#9474;  &#9500;&#9472; couchShifts.txt                      <i>optional &mdash; interrupt sessions</i>
+&#9474;  &#9492;&#9472; KIM-KV\                              <i>optional &mdash; kV frames for hover preview</i>
+&#9492;&#9472; lung-typical, ...\</pre>
+  <p class="lede" style="margin-bottom: 36px;">
+    Session folder names drive classification: a name containing e.g.
+    <code>prostate</code>&nbsp;+&nbsp;<code>erratic</code> is matched (case-insensitively) to
+    <code>t_Prostate_Erratic.txt</code>, searched anywhere under <code>Motion traces</code>;
+    unmatched folders are treated as static. The match can be overridden per session in the app,
+    and a different traces location can be given with <code>--traces-root</code>.
   </p>
   <div class="io-table">
     <div class="io-row">
@@ -475,15 +503,15 @@
       (implicit 20 ms step) or a 7-column <code>_robot</code> file with explicit timestamps.</div>
     </div>
     <div class="io-row">
-      <div class="name">Centroid file<span class="opt">Static sessions</span></div>
-      <div class="desc">Seed and isocentre coordinates, in cm. Provides the expected position for
-      static localisation. Internally everything is carried as LR/SI/AP in mm.</div>
+      <div class="name">Centroid file<span class="opt">Not needed</span></div>
+      <div class="desc">Not read by the app. KIM trajectory positions are already
+      isocentre-relative, so static sessions are assessed directly against zero.</div>
     </div>
   </div>
   <div class="reg">
-    Coordinate convention: centroid files use <b>(X, Y, Z) in cm</b>; the app works internally in
-    <b>LR/SI/AP millimetres</b>. Couch-shift sign handling differs by vendor, so set
-    <b>--vendor</b> to match the treatment machine (default Elekta).
+    Coordinate convention: the app works internally in <b>LR/SI/AP millimetres</b>. Couch-shift
+    sign handling differs by vendor, so set <b>--vendor</b> to match the treatment machine
+    (default Elekta).
   </div>
 </section>
 
