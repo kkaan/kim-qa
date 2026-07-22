@@ -138,3 +138,13 @@ def test_cli_parse_args():
     assert ns.root == "C:/data" and ns.vendor == "Varian" and ns.port == 9000
     ns2 = parse_args([])
     assert ns2.root is None and ns2.vendor is None and ns2.port == 0
+
+
+def test_cli_version_flag(capsys):
+    import pytest
+    from kim_qa.server.__main__ import parse_args
+    from kim_qa.version import __version__
+    with pytest.raises(SystemExit) as exc:
+        parse_args(["--version"])
+    assert exc.value.code == 0
+    assert capsys.readouterr().out.strip() == f"KIM-QA-Server {__version__}"

@@ -6,6 +6,8 @@ import webbrowser
 
 import uvicorn
 
+from kim_qa.version import __version__
+
 from .app import create_app
 from .config import ServerConfig
 from .state import load_vendor
@@ -15,6 +17,8 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(
         prog="kim_qa.server",
         description="KIM QA Analysis: browser-based overlay GUI")
+    p.add_argument("--version", action="version",
+                   version=f"KIM-QA-Server {__version__}")
     p.add_argument("--root", default=None,
                    help="Results root (folder of session folders). "
                         "Omit to pick via folder dialog.")

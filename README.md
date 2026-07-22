@@ -23,6 +23,7 @@ KIM-QA-Server.exe --root "D:\KIM\2026-06-23"
 Omit `--root` to pick the folder from a dialog. Add `--vendor Varian` for Varian
 machines (flips the vertical-to-AP couch-shift sign; default Elekta). The vendor
 choice persists per results root, so the flag can be omitted on later runs.
+`--version` prints which release you are running.
 
 ## Run from source
 
@@ -49,6 +50,27 @@ A dynamic session passes when `|mean| <= 1 mm` and `SD <= 2 mm` per axis.
 ## What it reads
 
 The app parses standard KIM session folders live; nothing needs pre-processing.
+Point it at one results root containing a folder per session, with the
+ground-truth traces in a `Motion traces` folder alongside them:
+
+```
+D:\KIM\2026-06-23\                          <- the results root you pick at launch
+├─ PHANTOM_ROBOT_Centroid.txt               <- shared centroid file (a session-local copy overrides it)
+├─ Motion traces\                           <- ground-truth traces (any nesting inside)
+│  └─ hexamotion-prostate\t_Prostate_Continuous_Drift.txt
+├─ Prostate-Continuous-interrupt, ...\      <- one folder per session; the name picks the trace
+│  ├─ MarkerLocationsGA_CouchShift_0.txt       primary log: positions + gantry (_1, _2, ... after interrupts)
+│  ├─ MarkerLocations_CouchShift_0.txt         fallback when the GA log is absent
+│  ├─ couchShifts.txt                          optional - interrupt sessions
+│  └─ KIM-KV\                                  optional - kV frames for hover preview
+└─ lung-typical, ...\
+```
+
+Session folder names drive classification: a name containing e.g. `prostate` +
+`erratic` is matched (case-insensitively, spaces ignored) to
+`t_Prostate_Erratic.txt`, searched anywhere under `Motion traces`; unmatched
+folders are treated as static. The match can be overridden per session in the
+app, and a different traces location can be given with `--traces-root`.
 
 | Path | Purpose |
 | --- | --- |
