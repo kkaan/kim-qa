@@ -469,8 +469,8 @@
 &#9500;&#9472; <b>Motion traces\</b>                           <i>&larr; ground-truth traces (any nesting inside)</i>
 &#9474;  &#9492;&#9472; hexamotion-prostate\t_Prostate_Continuous_Drift.txt
 &#9500;&#9472; <b>Prostate-Continuous-interrupt, ...\</b>      <i>&larr; one folder per session; the name picks the trace</i>
-&#9474;  &#9500;&#9472; MarkerLocations_CouchShift_0.txt     <i>required (_1, _2, ... after each interrupt)</i>
-&#9474;  &#9500;&#9472; MarkerLocationsGA_CouchShift_0.txt   <i>gantry-angle log (one per segment)</i>
+&#9474;  &#9500;&#9472; MarkerLocationsGA_CouchShift_0.txt   <i>primary log: positions + gantry (_1, _2, ... after interrupts)</i>
+&#9474;  &#9500;&#9472; MarkerLocations_CouchShift_0.txt     <i>fallback when the GA log is absent</i>
 &#9474;  &#9500;&#9472; couchShifts.txt                      <i>optional &mdash; interrupt sessions</i>
 &#9474;  &#9492;&#9472; KIM-KV\                              <i>optional &mdash; kV frames for hover preview</i>
 &#9492;&#9472; lung-typical, ...\</pre>
