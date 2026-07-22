@@ -46,6 +46,19 @@ def write_ga_file(path: Path, t, ap, lr, si, gantry, header=True,
     path.write_text("".join(lines), encoding="utf-8")
 
 
+def write_centroid_file(path: Path, seeds=((0.0, 0.0, 0.0),),
+                        iso=(0.0, 0.0, 0.0)):
+    """Centroid file with 1..3 seed/marker lines + isocentre, coords in cm.
+    A single seed is written phantom-style (Marker_GTV); several are written
+    patient-style (Seed 1, Seed 2, ...)."""
+    lines = []
+    for i, (x, y, z) in enumerate(seeds, 1):
+        label = "Marker_GTV" if len(seeds) == 1 else f"Seed {i}"
+        lines.append(f"{label}, X= {x:.2f}, Y= {y:.2f}, Z= {z:.2f}\n")
+    lines.append(f"Isocentre , X={iso[0]:.1f} , Y={iso[1]:.1f} , Z={iso[2]:.1f}\n")
+    path.write_text("".join(lines), encoding="utf-8")
+
+
 def write_couch_shifts(path: Path, rows_cm):
     """rows_cm: list of (vrt, lng, lat) in cm, one per couch position."""
     lines = ["VRT, LNG, LAT\n"]
@@ -82,6 +95,7 @@ def make_interrupt_session(folder: Path, name="Prostate-Continuous-interrupt,Tes
                   header=False)
     write_couch_shifts(sess / "couchShifts.txt",
                        [(-15.80, 125.50, -0.30), (-15.63, 125.62, -0.27)])
+    write_centroid_file(sess / "Phantom_Centroid.txt")
     return sess
 
 
@@ -104,6 +118,7 @@ def make_static_session(folder: Path, name="Static,Test_1207"):
     t = np.arange(0.0, 20.0, 1.0)
     z = np.zeros(20)
     write_kim_file(sess / "MarkerLocations_CouchShift_0.txt", t, z + 0.05, z - 0.02, z + 0.01)
+    write_centroid_file(sess / "Phantom_Centroid.txt")
     return sess
 
 
@@ -128,4 +143,5 @@ def make_motion_session(folder: Path, traces_root: Path,
     g = np.linspace(180.0, 100.0, len(t))
     write_ga_file(sess / "MarkerLocationsGA_CouchShift_0.txt", t, ap, lr, si, g)
     write_hex_trace(traces_root / "t_Lung_Typical.txt", n=2500)
+    write_centroid_file(sess / "Phantom_Centroid.txt")
     return sess

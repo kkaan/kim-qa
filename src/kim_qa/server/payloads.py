@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
+from kim_qa.io.centroid import parse_centroid_file
 from kim_qa.io.couch import parse_couch_shifts
 from kim_qa.interrupt import apply_couch_shifts
 from kim_qa.io.marker_locations import read_kim_segments, read_gantry_segments
@@ -35,23 +36,41 @@ def read_hex(path: Path) -> dict:
     }
 
 
+def expected_centroid(session: Session) -> dict:
+    """Per-axis expected marker-centroid offset from iso (mm, keys lr/si/ap)
+    plus the source filename. Every session requires a centroid file; a
+    phantom with the marker at isocentre uses an all-zero file."""
+    if session.centroid_file is None:
+        raise FileNotFoundError(f"{session.id}: no centroid file")
+    exp = parse_centroid_file(session.centroid_file)["expected_centroid"]
+    # parse_centroid_file axes map x->LR, y->SI, z->AP (see kim_qa.metrics).
+    # "+ 0.0" normalises IEEE -0.0 so displays never show "-0.00".
+    return {"file": session.centroid_file.name, "lr": float(exp["x"]) + 0.0,
+            "si": float(exp["y"]) + 0.0, "ap": float(exp["z"]) + 0.0}
+
+
 def load_session_arrays(session: Session, vendor: str) -> dict:
-    """Raw-timebase stitched arrays, couch-shift-corrected (shift-removed).
+    """Raw-timebase stitched arrays, couch-shift-corrected (shift-removed)
+    and centroid-corrected (expected marker offset from iso subtracted).
 
     Returns dict with numpy arrays t, lr, si, ap, file_index, optional gantry,
-    and shifts (list of vendor-signed {lr, si, ap} dicts, possibly empty).
+    shifts (list of vendor-signed {lr, si, ap} dicts, possibly empty), and
+    centroid ({file, lr, si, ap} of the subtracted expected offset).
     """
     folder = session.kim_file.parent
     segs = read_kim_segments(folder)
+    cent = expected_centroid(session)
     shifts = []
-    lr, si, ap = segs["lr"], segs["si"], segs["ap"]
+    lr = segs["lr"] - cent["lr"]
+    si = segs["si"] - cent["si"]
+    ap = segs["ap"] - cent["ap"]
     if session.has_couch_shifts:
         shifts = parse_couch_shifts(folder / "couchShifts.txt", vendor=vendor)
         lr, si, ap = apply_couch_shifts(lr, si, ap, segs["file_index"], shifts)
     gantry = read_gantry_segments(folder, expected_len=len(segs["t"]))
     return {"t": segs["t"], "lr": lr, "si": si, "ap": ap,
             "file_index": segs["file_index"], "gantry": gantry,
-            "shifts": shifts}
+            "shifts": shifts, "centroid": cent}
 
 
 def shift_events(t, file_index, shifts) -> list[dict]:
@@ -110,6 +129,9 @@ def build_overlay_payload(session: Session, vendor: str,
         "file_index": [int(x) for x in arrays["file_index"]],
         "shift_events": shift_events(arrays["t"], arrays["file_index"],
                                      arrays["shifts"]),
+        "centroid": {"file": arrays["centroid"]["file"],
+                     **{k: round(arrays["centroid"][k], ROUND_DP)
+                        for k in ("lr", "si", "ap")}},
     }
     if hex_data is not None:
         payload["hex"] = hex_data
@@ -137,14 +159,19 @@ def compress_gaps(t_real, gap_threshold=5.0, compressed_gap=3.0):
 
 def build_couch_steps_payload(session: Session, vendor: str,
                               state_entry: dict | None) -> dict:
-    """Uncorrected positions on a gap-compressed timebase + expected step
-    levels per segment. Port of export_overlay_to_webapp.build_couch_shift."""
+    """Couch-shift-uncorrected (but centroid-corrected) positions on a
+    gap-compressed timebase + expected step levels per segment. Port of
+    export_overlay_to_webapp.build_couch_shift."""
     folder = session.kim_file.parent
     couch = folder / "couchShifts.txt"
     if not couch.exists():
         raise ValueError(f"{session.id} has no couchShifts.txt")
     shifts = parse_couch_shifts(couch, vendor=vendor)
     segs = read_kim_segments(folder)
+    cent = expected_centroid(session)
+    kim_lr = segs["lr"] - cent["lr"]
+    kim_si = segs["si"] - cent["si"]
+    kim_ap = segs["ap"] - cent["ap"]
     t_disp, markers = compress_gaps(segs["t"])
     fi = segs["file_index"].astype(int)
     n_segs = int(fi.max()) + 1
@@ -153,9 +180,9 @@ def build_couch_steps_payload(session: Session, vendor: str,
     for i, sh in enumerate(shifts[: n_segs - 1]):
         cum[i + 1] = cum[i] + np.array([sh["lr"], sh["si"], sh["ap"]])
     seg0 = fi == 0
-    base = np.array([float(np.mean(segs["lr"][seg0])),
-                     float(np.mean(segs["si"][seg0])),
-                     float(np.mean(segs["ap"][seg0]))])
+    base = np.array([float(np.mean(kim_lr[seg0])),
+                     float(np.mean(kim_si[seg0])),
+                     float(np.mean(kim_ap[seg0]))])
     expected = base + cum
 
     bounds = [[float(np.min(t_disp[fi == k])), float(np.max(t_disp[fi == k]))]
@@ -165,8 +192,8 @@ def build_couch_steps_payload(session: Session, vendor: str,
         "kind": "couch_shift",
         "saved_ranges": [[float(lo), float(hi)]
                          for lo, hi in (state_entry or {}).get("ranges", [])],
-        "kim": {"t": _r4(t_disp), "lr": _r4(segs["lr"]),
-                "si": _r4(segs["si"]), "ap": _r4(segs["ap"])},
+        "kim": {"t": _r4(t_disp), "lr": _r4(kim_lr),
+                "si": _r4(kim_si), "ap": _r4(kim_ap)},
         "file_index": [int(x) for x in fi],
         "shifts": [[round(float(s["lr"]), ROUND_DP),
                     round(float(s["si"]), ROUND_DP),

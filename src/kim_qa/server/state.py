@@ -12,7 +12,7 @@ import numpy as np
 
 from kim_qa.metrics import overlay_metrics_table, overlay_residuals
 from .discovery import Session
-from .payloads import build_overlay_payload
+from .payloads import build_overlay_payload, expected_centroid
 
 STATE_FILENAME = "_overlay_state.json"
 SUMMARY_FILENAME = "summary.md"
@@ -91,6 +91,12 @@ def regenerate_summary(root: Path, sessions: list, vendor: str) -> Path:
         hex_label = sess.hex_file.name if sess.hex_file else "(none, flat-zero)"
         lines.append(f"- **Type:** {sess.kind}")
         lines.append(f"- **Hex trace:** {hex_label}")
+        if sess.centroid_file is not None:
+            cent = expected_centroid(sess)
+            lines.append(
+                f"- **Centroid:** {cent['file']} (expected offset subtracted: "
+                f"LR {cent['lr']:+.2f}, SI {cent['si']:+.2f}, "
+                f"AP {cent['ap']:+.2f} mm)")
         lines.append(f"- **Time offset:** {float(entry.get('offset', 0)):+.2f} s")
         lines.append(f"- **Ranges:** {len(entry.get('ranges', []))} "
                      f"(n = {res.n})")

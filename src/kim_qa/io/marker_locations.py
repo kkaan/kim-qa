@@ -19,6 +19,27 @@ import pandas as pd
 KIM_FILENAME = "MarkerLocations_CouchShift_0.txt"
 _SEG_RE = re.compile(r"^MarkerLocations_CouchShift_(\d+)\.txt$")
 _GA_RE = re.compile(r"^MarkerLocationsGA_CouchShift_(\d+)\.txt$")
+_MARKER_COL_RE = re.compile(r"^Marker_(\d+)_(AP|LR|SI)$")
+
+
+def _marker_columns(path: Path):
+    """{marker: {"AP": col, "LR": col, "SI": col}} resolved by name from the
+    header, or None when the file is headerless or names no complete
+    Marker_<n>_AP/LR/SI triple (older logs label the single marker's columns
+    "AP (mm)", ...). Safe despite the embedded-comma Filename quirk: the
+    marker columns sit left of Filename, so header and data indices agree."""
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        header = fh.readline()
+    if not header.lstrip().startswith("Frame"):
+        return None
+    names = [c.strip() for c in header.split(",")]
+    cols = {}
+    for i, name in enumerate(names):
+        m = _MARKER_COL_RE.match(name)
+        if m:
+            cols.setdefault(int(m.group(1)), {})[m.group(2)] = i
+    complete = {k: v for k, v in cols.items() if len(v) == 3}
+    return complete or None
 
 
 def _has_header(path: Path) -> bool:
@@ -46,25 +67,43 @@ def _numbered_files(folder: Path, pattern: re.Pattern) -> list[Path]:
 def read_kim_segments(folder: Path) -> dict:
     """All MarkerLocations_CouchShift_*.txt in numeric order, concatenated.
 
+    Multi-marker files (complete Marker_0/1/2 AP/LR/SI column triples in the
+    first file's header) are averaged into a single centroid trajectory, the
+    same reduction the MATLAB scripts applied; the column indices are reused
+    for headerless continuation files. Headers without Marker triples fall
+    back to the positional layout (cols 1..4 = time, AP, LR, SI).
+
     Returns dict of numpy arrays: t, lr, si, ap (raw, uncorrected, real
-    timebase) and int array file_index.
+    timebase), int array file_index, and int n_markers.
     """
     files = _numbered_files(folder, _SEG_RE)
     if not files:
         raise FileNotFoundError(f"No {KIM_FILENAME[:-5]}*.txt in {folder}")
+    markers = _marker_columns(files[0])
     t, lr, si, ap, fi = [], [], [], [], []
     for k, fp in enumerate(files):
-        df = _read_positional(fp, usecols=[1, 2, 3, 4])
-        df.columns = ["time", "ap", "lr", "si"]
-        t.append(df["time"].to_numpy(float))
-        ap.append(df["ap"].to_numpy(float))
-        lr.append(df["lr"].to_numpy(float))
-        si.append(df["si"].to_numpy(float))
+        if markers is None:
+            df = _read_positional(fp, usecols=[1, 2, 3, 4])
+            df.columns = ["time", "ap", "lr", "si"]
+            t.append(df["time"].to_numpy(float))
+            ap.append(df["ap"].to_numpy(float))
+            lr.append(df["lr"].to_numpy(float))
+            si.append(df["si"].to_numpy(float))
+        else:
+            axis_cols = {axis: [m[axis] for m in markers.values()]
+                         for axis in ("AP", "LR", "SI")}
+            usecols = sorted({1, *(c for cs in axis_cols.values() for c in cs)})
+            df = _read_positional(fp, usecols=usecols)
+            t.append(df[1].to_numpy(float))
+            for axis, dest in (("AP", ap), ("LR", lr), ("SI", si)):
+                dest.append(np.mean(
+                    [df[c].to_numpy(float) for c in axis_cols[axis]], axis=0))
         fi.append(np.full(len(df), k, dtype=int))
     return {
         "t": np.concatenate(t), "lr": np.concatenate(lr),
         "si": np.concatenate(si), "ap": np.concatenate(ap),
         "file_index": np.concatenate(fi),
+        "n_markers": len(markers) if markers else 1,
     }
 
 

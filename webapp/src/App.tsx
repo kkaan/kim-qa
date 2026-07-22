@@ -105,6 +105,7 @@ export default function App() {
             </h1>
             <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>
               {entry.hex_file ? `hex: ${entry.hex_file}` : 'flat-zero ground truth'}
+              {entry.centroid_file ? ` · centroid: ${entry.centroid_file}` : ''}
               {entry.has_couch_shifts ? ' · couch shifts present' : ''}
             </div>
             {entry.has_couch_shifts && (

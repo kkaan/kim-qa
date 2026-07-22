@@ -3,16 +3,20 @@ import type { CouchShiftPayload, OverlayPayload, Range } from './lib';
 
 export type ShiftEvent = { t_after: number; lr: number; si: number; ap: number };
 
+export type CentroidInfo = { file: string; lr: number; si: number; ap: number };
+
 export type ServerPayload = OverlayPayload & {
   file_index: number[];
   shift_events: ShiftEvent[];
   offset_origin: string;
+  centroid: CentroidInfo;
 };
 
 export type ManifestEntry = {
   id: string;
   kind: 'motion' | 'static';
   hex_file: string | null;
+  centroid_file: string | null;
   has_frames: boolean;
   has_couch_shifts: boolean;
   saved_offset: number | null;

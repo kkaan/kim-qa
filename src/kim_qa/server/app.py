@@ -93,6 +93,8 @@ def create_app(config: ServerConfig) -> FastAPI:
                 "id": sess.id,
                 "kind": sess.kind,
                 "hex_file": sess.hex_file.name if sess.hex_file else None,
+                "centroid_file": (sess.centroid_file.name
+                                  if sess.centroid_file else None),
                 "has_frames": sess.has_frames,
                 "has_couch_shifts": sess.has_couch_shifts,
                 "saved_offset": entry.get("offset"),

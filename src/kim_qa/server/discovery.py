@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from kim_qa.io.centroid import parse_centroid_file
 from kim_qa.io.marker_locations import KIM_FILENAME, read_kim_segments
 from .config import ServerConfig
 
@@ -46,6 +47,7 @@ class Session:
     hex_file: Optional[Path]
     has_frames: bool
     has_couch_shifts: bool
+    centroid_file: Optional[Path] = None
     error: Optional[str] = None
 
 
@@ -59,6 +61,21 @@ def align_axis_for(name: str) -> str:
         if all(s in key for s in subs):
             return axis
     return "SI"
+
+
+def find_centroid_file(*folders: Optional[Path]) -> Optional[Path]:
+    """First *.txt whose name contains 'centroid' (case-insensitive),
+    searching each folder in order — so a session-local file wins over a
+    shared one at the results root."""
+    for base in folders:
+        if base is None or not base.is_dir():
+            continue
+        cands = sorted(p for p in base.iterdir()
+                       if p.is_file() and p.suffix.lower() == ".txt"
+                       and "centroid" in p.name.lower())
+        if cands:
+            return cands[0]
+    return None
 
 
 def find_trace(traces_root: Path, filename: str) -> Optional[Path]:
@@ -120,9 +137,16 @@ def discover_sessions(config: ServerConfig,
             hex_file=hex_path,
             has_frames=(kim_file.parent / "KIM-KV").is_dir(),
             has_couch_shifts=(kim_file.parent / "couchShifts.txt").exists(),
+            centroid_file=find_centroid_file(kim_file.parent, folder,
+                                             config.root),
         )
         try:
             # Parse eagerly enough to surface unreadable folders in the UI.
+            if sess.centroid_file is None:
+                raise FileNotFoundError(
+                    "No centroid file (*centroid*.txt) in the session folder "
+                    "or results root - one is required")
+            parse_centroid_file(sess.centroid_file)
             read_kim_segments(kim_file.parent)
         except Exception as e:  # noqa: BLE001 - surfaced to the client
             sess.error = str(e)
