@@ -51,11 +51,12 @@ The app parses standard KIM session folders live; nothing needs pre-processing.
 
 | Path | Purpose |
 | --- | --- |
-| `MarkerLocationsGA_CouchShift_*.txt` | KIM trajectory files (per session). |
+| `MarkerLocationsGA_CouchShift_*.txt` | KIM trajectory logs, primary source (positions + gantry). |
+| `MarkerLocations_CouchShift_*.txt` | Fallback trajectory logs (same marker data, no gantry). |
+| `*centroid*.txt` (required) | 1–3 seed/marker lines + isocentre, in cm. Per session or shared at the root; the expected centroid offset from iso is subtracted before analysis (all-zero file for a marker at isocentre). |
 | `couchShifts.txt` (optional) | Commanded couch movements (VRT, LNG, LAT). |
 | `KIM-KV/` (optional) | kV frames, shown on hover behind each detection. |
 | `Motion traces/` (motion sessions) | HexaMotion / 6DoF-robot ground-truth traces. |
-| Centroid file (static sessions) | Seed and isocentre coordinates, in cm. |
 
 Coordinate convention: centroid files use `(X, Y, Z)` in cm; the app works
 internally in LR/SI/AP millimetres.
