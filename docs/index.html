@@ -465,6 +465,7 @@
   </p>
   <pre class="tree">
 <b>D:\KIM\2026-06-23\</b>                          <i>&larr; the results root you pick at launch</i>
+&#9500;&#9472; <b>PHANTOM_ROBOT_Centroid.txt</b>               <i>&larr; shared centroid file (a session-local copy overrides it)</i>
 &#9500;&#9472; <b>Motion traces\</b>                           <i>&larr; ground-truth traces (any nesting inside)</i>
 &#9474;  &#9492;&#9472; hexamotion-prostate\t_Prostate_Continuous_Drift.txt
 &#9500;&#9472; <b>Prostate-Continuous-interrupt, ...\</b>      <i>&larr; one folder per session; the name picks the trace</i>
@@ -503,15 +504,17 @@
       (implicit 20 ms step) or a 7-column <code>_robot</code> file with explicit timestamps.</div>
     </div>
     <div class="io-row">
-      <div class="name">Centroid file<span class="opt">Not needed</span></div>
-      <div class="desc">Not read by the app. KIM trajectory positions are already
-      isocentre-relative, so static sessions are assessed directly against zero.</div>
+      <div class="name"><code>*centroid*.txt</code><span class="opt">Required</span></div>
+      <div class="desc">1&ndash;3 seed/marker lines plus the isocentre, in cm. The seed-centroid
+      offset from isocentre is subtracted from every KIM trajectory before analysis. Place one
+      per session, or a shared one at the results root; for a marker sitting at isocentre use an
+      all-zero file. Multi-marker KIM logs are averaged into the same centroid.</div>
     </div>
   </div>
   <div class="reg">
-    Coordinate convention: the app works internally in <b>LR/SI/AP millimetres</b>. Couch-shift
-    sign handling differs by vendor, so set <b>--vendor</b> to match the treatment machine
-    (default Elekta).
+    Coordinate convention: centroid files use <b>(X, Y, Z) in cm</b>; the app works internally
+    in <b>LR/SI/AP millimetres</b>. Couch-shift sign handling differs by vendor, so set
+    <b>--vendor</b> to match the treatment machine (default Elekta).
   </div>
 </section>
 
