@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AppConfig, AppManifest, ManifestEntry, fetchConfig, fetchManifest, postVendor,
 } from './api';
-import KimOverlay from './widgets/KimOverlay';
+import KimOverlay, { ViewState } from './widgets/KimOverlay';
 
 const KIND_COLORS: Record<string, string> = {
   motion: 'var(--cyan)', static: 'var(--gray)',
@@ -14,6 +14,13 @@ export default function App() {
   const [selected, setSelected] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Per-session view state (offset/ranges/zoom), remembered across navigation.
+  // A ref, not state: it is only read when an overlay mounts (which a session
+  // switch already re-renders), so updates need not trigger a render.
+  const viewStates = useRef<Record<string, ViewState>>({});
+  const rememberView = useCallback((id: string, view: ViewState) => {
+    viewStates.current[id] = view;
+  }, []);
 
   const reload = () =>
     fetchManifest().then(setManifest).catch((e) => setError(String(e)));
@@ -109,7 +116,8 @@ export default function App() {
             {/* Key includes the vendor so a vendor switch remounts and refetches
                 the open session with re-signed couch corrections. */}
             <KimOverlay key={`${entry.id}:${config.vendor}`} entry={entry} traces={manifest.traces}
-              onToast={setToast} onStateSaved={reload} />
+              onToast={setToast} onStateSaved={reload}
+              initialView={viewStates.current[entry.id]} onViewChange={rememberView} />
           </>
         )}
 

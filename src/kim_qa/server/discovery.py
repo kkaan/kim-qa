@@ -6,7 +6,7 @@ recursively, as some sessions nest it). Name-substring matching against
 PAIR_MAP assigns the hexamotion ground-truth trace; anything unmatched is
 static (flat-zero ground truth).
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -52,6 +52,26 @@ class Session:
     has_couch_shifts: bool
     centroid_file: Optional[Path] = None
     error: Optional[str] = None
+    offline_dirs: list = field(default_factory=list)   # nested kim-log* folders
+
+
+def find_offline_dirs(folder: Path, primary_parent: Path) -> list:
+    """Nested offline-reprocessing folders to overlay: immediate subdirectories
+    named 'kim-log*' (case-insensitive, e.g. kim-log-pdf480) that hold a KIM
+    log and are not the folder the primary (online) trace was read from."""
+    out = []
+    for sub in sorted(folder.iterdir()):
+        if not sub.is_dir() or sub == primary_parent:
+            continue
+        if not sub.name.lower().startswith("kim-log"):
+            continue
+        has_log = ((sub / KIM_FILENAME).exists()
+                   or (sub / FALLBACK_KIM_FILENAME).exists()
+                   or next(sub.rglob(KIM_FILENAME), None) is not None
+                   or next(sub.rglob(FALLBACK_KIM_FILENAME), None) is not None)
+        if has_log:
+            out.append(sub)
+    return out
 
 
 def _norm(name: str) -> str:
@@ -147,6 +167,7 @@ def discover_sessions(config: ServerConfig,
             has_couch_shifts=(kim_file.parent / "couchShifts.txt").exists(),
             centroid_file=find_centroid_file(kim_file.parent, folder,
                                              config.root),
+            offline_dirs=find_offline_dirs(folder, kim_file.parent),
         )
         try:
             # Parse eagerly enough to surface unreadable folders in the UI.

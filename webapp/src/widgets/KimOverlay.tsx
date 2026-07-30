@@ -83,24 +83,55 @@ type FrameEntry = {
   missing?: boolean;
 };
 
+// The user-tunable view state, lifted into the parent App so it survives
+// navigating away to another session and back (remount) without a Save.
+export type ViewState = {
+  offset: number;
+  ranges: Range[];
+  yRange: number | null;
+  xRange: [number, number] | null;
+  // Per-offline-overlay time offset (s), keyed by source folder. Absent folder
+  // = follow the primary offset.
+  offlineOffsets: Record<string, number>;
+};
+
 type Props = {
   entry: ManifestEntry;
   traces: string[];
   onToast: (m: string) => void;
   onStateSaved: () => void;
+  initialView?: ViewState;
+  onViewChange: (id: string, view: ViewState) => void;
 };
 
-export default function KimOverlay({ entry, traces, onToast, onStateSaved }: Props) {
+export default function KimOverlay({
+  entry, traces, onToast, onStateSaved, initialView, onViewChange,
+}: Props) {
   const experiment = entry.id;
   const framesBase = framesBaseFor(experiment);
   const height = 560;
+  // The parent-remembered view for this session at mount time. In a ref so it
+  // is applied once (after the payload loads) without re-running the fetch.
+  const initialViewRef = useRef(initialView);
 
   const [payload, setPayload] = useState<ServerPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [offset, setOffset] = useState(0);
   const [ranges, setRanges] = useState<Range[]>([]);
+  // Persisted time-axis zoom/pan in TRUE time (null = default view). Captured
+  // from Plotly relayout events (inverted out of display-squash coords) and
+  // forward-mapped back when applied to the axis range.
+  const [xRange, setXRange] = useState<[number, number] | null>(null);
   const [errorMode, setErrorMode] = useState(false);
   const [showGhost, setShowGhost] = useState(false);
+  // Offline overlays currently toggled ON via the legend, in click order. The
+  // last entry drives the metrics card (its colour + source); [] = the primary
+  // online trace. Resets on remount (session switch).
+  const [toggledOn, setToggledOn] = useState<string[]>([]);
+  // Independent time offset per offline overlay, keyed by source folder. An
+  // absent folder follows the primary `offset`; set once the user nudges that
+  // overlay's alignment. Persisted to state under "offline_offsets".
+  const [offlineOffsets, setOfflineOffsets] = useState<Record<string, number>>({});
   const [yRange, setYRange] = useState<number | null>(
     entry.y_range ?? DEFAULT_Y_RANGE);
   const [hexOverride, setHexOverride] = useState<string | null>(entry.hex_override);
@@ -119,8 +150,27 @@ export default function KimOverlay({ entry, traces, onToast, onStateSaved }: Pro
       .then((data) => {
         if (cancelled) return;
         setPayload(data);
-        setOffset(data.saved_offset ?? 0);
-        setRanges((data.saved_ranges ?? []).map((r) => [r[0], r[1]] as Range));
+        const iv = initialViewRef.current;
+        if (iv) {
+          // Restore the view we were showing before navigating away — this
+          // (not the disk value) is authoritative, so an un-saved pan/zoom
+          // survives a round-trip through another session.
+          setOffset(iv.offset);
+          setRanges(iv.ranges);
+          setYRange(iv.yRange);
+          setXRange(iv.xRange);
+          setOfflineOffsets(iv.offlineOffsets ?? {});
+        } else {
+          setOffset(data.saved_offset ?? 0);
+          setRanges((data.saved_ranges ?? []).map((r) => [r[0], r[1]] as Range));
+          setXRange(data.saved_x_range ?? null);
+          // Seed each overlay's saved offset; a null (follow-primary) is left out.
+          const seed: Record<string, number> = {};
+          for (const ov of data.kim_offline ?? []) {
+            if (ov.offset != null) seed[ov.folder] = ov.offset;
+          }
+          setOfflineOffsets(seed);
+        }
         // Interrupt sessions show the shift-removed trace by default so each
         // couch step and its effect is visible; the toggle can still hide it.
         setShowGhost((data.shift_events?.length ?? 0) > 0);
@@ -128,6 +178,14 @@ export default function KimOverlay({ entry, traces, onToast, onStateSaved }: Pro
       .catch((e) => !cancelled && setError(String(e)));
     return () => { cancelled = true; };
   }, [experiment]);
+
+  // Mirror the live view up to the parent so navigating away and back restores
+  // it. Gated on payload so the pre-load defaults never clobber a remembered
+  // view; writes to a parent ref, so this causes no extra renders.
+  useEffect(() => {
+    if (!payload) return;
+    onViewChange(experiment, { offset, ranges, yRange, xRange, offlineOffsets });
+  }, [offset, ranges, yRange, xRange, offlineOffsets, payload, experiment, onViewChange]);
 
   useEffect(() => {
     if (!entry.has_frames) { setFrames(null); return; }
@@ -175,11 +233,49 @@ export default function KimOverlay({ entry, traces, onToast, onStateSaved }: Pro
     return flatZeroHex(payload.kim);
   }, [payload]);
 
+  // Which trace the metrics card describes: the last-toggled-on offline overlay,
+  // else the primary online run.
+  const activeOverlay = toggledOn.length ? toggledOn[toggledOn.length - 1] : null;
+  const overlayColor = (i: number) =>
+    [colors.purple, colors.green, colors.pink][i % 3];
+
+  // The Time-offset control retargets to the ACTIVE trace: the last-toggled-on
+  // offline overlay (its own independent offset), else the primary online run.
+  // An overlay with no stored offset follows the primary until the user nudges
+  // it. Keeps one slider driving whichever trace the metrics card describes.
+  const activeFolder = activeOverlay && payload
+    ? (payload.kim_offline ?? []).find((o) => o.label === activeOverlay)?.folder ?? null
+    : null;
+  const activeOffset = activeFolder != null
+    ? (offlineOffsets[activeFolder] ?? offset) : offset;
+  const setActiveOffset = (next: number | ((o: number) => number)) => {
+    if (activeFolder != null) {
+      setOfflineOffsets((prev) => {
+        const cur = prev[activeFolder] ?? offset;
+        const val = typeof next === 'function' ? next(cur) : next;
+        return { ...prev, [activeFolder]: val };
+      });
+    } else {
+      setOffset(next);
+    }
+  };
+
   const metrics = useMemo(() => {
     if (!payload || !hex) return null;
-    const res = computeResiduals(payload.kim, hex, offset, ranges);
-    return { rows: metricsTable(res), n: res.n, totalDt: res.totalDt, source: payload.id };
-  }, [payload, hex, offset, ranges]);
+    const overlays = payload.kim_offline ?? [];
+    const oi = activeOverlay ? overlays.findIndex((o) => o.label === activeOverlay) : -1;
+    const ov = oi >= 0 ? overlays[oi] : null;
+    const src = ov ? { t: ov.t, lr: ov.lr, si: ov.si, ap: ov.ap } : payload.kim;
+    // Residuals honour the active trace's own alignment, so an offline overlay's
+    // metrics reflect its independent offset, not the primary run's.
+    const effOffset = ov ? (offlineOffsets[ov.folder] ?? offset) : offset;
+    const res = computeResiduals(src, hex, effOffset, ranges);
+    return {
+      rows: metricsTable(res), n: res.n, totalDt: res.totalDt,
+      source: ov ? `${ov.folder} (offline)` : payload.id,
+      color: ov ? overlayColor(oi) : colors.orange,
+    };
+  }, [payload, hex, offset, offlineOffsets, ranges, activeOverlay, colors]);
 
   // Display-only dead-time compression map, shared by the figure (forward: true
   // shifted time -> compressed display coordinate) and by drag-select handling
@@ -192,10 +288,10 @@ export default function KimOverlay({ entry, traces, onToast, onStateSaved }: Pro
       [...kimX].sort((a, b) => a - b), COMPRESS_MIN_GAP, COMPRESS_KEEP);
   }, [payload, offset]);
 
-  // Default view: from just before the first KIM point to 5 s past the last
-  // (at the saved offset), extended to the end of the hex trace on motion
-  // sessions so the ground truth visibly runs to completion rather than
-  // stopping at the last KIM point. Anchored to saved_offset (not the live
+  // Default view: from just before the first KIM point to 5 s past the last —
+  // the end of the last trajectory file when couch shifts split the
+  // acquisition. The hex trace keeps drawing past this (hold-to-end); zoom
+  // out to see it run to completion. Anchored to saved_offset (not the live
   // slider) so the value is stable across renders; combined with
   // layout.uirevision this sets the initial range while still letting the
   // user's own zoom and pan persist.
@@ -204,9 +300,7 @@ export default function KimOverlay({ entry, traces, onToast, onStateSaved }: Pro
     const off = payload.saved_offset ?? 0;
     let lo = Infinity, hi = -Infinity;
     for (const t of payload.kim.t) { if (t < lo) lo = t; if (t > hi) hi = t; }
-    const hexEnd = payload.kind === 'motion' && payload.hex
-      ? payload.hex.n * payload.hex.dt : -Infinity;
-    return [lo + off - 1, Math.max(hi + off + 5, hexEnd)];
+    return [lo + off - 1, hi + off + 5];
   }, [payload]);
 
   const figure = useMemo(() => {
@@ -218,6 +312,14 @@ export default function KimOverlay({ entry, traces, onToast, onStateSaved }: Pro
     // shifted plot-time collapses to COMPRESS_KEEP seconds.
     const { map: squash, bands } = squashInfo;
     const kimXd = kimX.map(squash);
+
+    // Offline overlays (nested kim-log* folders): same offset + squash as the
+    // primary; each gets a palette colour and starts hidden (legendonly), shown
+    // by toggling its legend entry.
+    const offlineTraces = (payload.kim_offline ?? []).map((ov, oi) => ({
+      ov, color: overlayColor(oi),
+      xd: ov.t.map((t) => squash(t + (offlineOffsets[ov.folder] ?? offset))),
+    }));
 
     // The hexamotion holds its final position once the trace file ends
     // (verified on Bluey interrupt data: hold-last fits the post-trace KIM
@@ -257,9 +359,13 @@ export default function KimOverlay({ entry, traces, onToast, onStateSaved }: Pro
     const gt = gantryArr ? gantryTicks(kim.t, gantryArr, offset) : null;
     if (gt) gt.vals = gt.vals.map(squash);
 
-    const dxr = defaultXRange
-      ? ([squash(defaultXRange[0]), squash(defaultXRange[1])] as [number, number])
-      : undefined;
+    // The persisted zoom (true time) wins over the computed default view; both
+    // are forward-mapped into display-squash coordinates for the axis range.
+    const dxr = xRange
+      ? ([squash(xRange[0]), squash(xRange[1])] as [number, number])
+      : defaultXRange
+        ? ([squash(defaultXRange[0]), squash(defaultXRange[1])] as [number, number])
+        : undefined;
 
     const cdata = kim.t.map((_, j) => [j, gantryArr ? gantryArr[j] : null, kimX[j]]);
     const kimHoverProps = { hoverinfo: 'none' as const };
@@ -322,6 +428,15 @@ export default function KimOverlay({ entry, traces, onToast, onStateSaved }: Pro
             showlegend: first,
             marker: { color: colors.gray, size: 4, opacity: 0.4 },
             hovertemplate: 'shift-removed: %{y:.3f} mm<extra></extra>',
+          });
+        }
+        for (const { ov, color, xd } of offlineTraces) {
+          data.push({
+            ...ax, x: xd, y: ov[key], type: 'scatter', mode: 'markers',
+            name: `KIM offline · ${ov.label}`, legendgroup: `ov-${ov.label}`,
+            showlegend: first, visible: 'legendonly',
+            marker: { color, size: 3 },
+            hovertemplate: `${ov.label}: %{y:.3f} mm<extra></extra>`,
           });
         }
       }
@@ -418,8 +533,8 @@ export default function KimOverlay({ entry, traces, onToast, onStateSaved }: Pro
       layout.legend = { ...layout.legend, y: -0.16, yanchor: 'top' };
     }
     return { data, layout };
-  }, [payload, hex, squashInfo, offset, ranges, errorMode, showGhost, yRange,
-      colors, defaultXRange, experiment]);
+  }, [payload, hex, squashInfo, offset, offlineOffsets, ranges, errorMode,
+      showGhost, yRange, colors, defaultXRange, xRange, experiment]);
 
   const config = useMemo(
     () => ({
@@ -444,6 +559,68 @@ export default function KimOverlay({ entry, traces, onToast, onStateSaved }: Pro
     const lo = invert(Math.min(a, b));
     const hi = invert(Math.max(a, b));
     setRanges((prev) => [...prev, [lo, hi] as Range]);
+  };
+
+  // Persist time-axis zoom/pan. Plotly reports the range in compressed display
+  // coordinates, so invert the squash to store true time (the same convention
+  // as ranges and the saved offset); double-click autorange clears it back to
+  // the default view.
+  const onRelayout = (e: any) => {
+    if (!e) return;
+    // Time axis (x), stored in true time (inverted out of the display squash).
+    // A full-reset (double-click) carries autorange for BOTH x and y, so handle
+    // them independently rather than early-returning on the x reset.
+    if (e['xaxis.autorange']) {
+      setXRange(null);
+    } else {
+      const a = e['xaxis.range[0]'];
+      const b = e['xaxis.range[1]'];
+      if (a != null && b != null) {
+        const invert = squashInfo ? squashInfo.invert : (x: number) => x;
+        setXRange([invert(Number(a)), invert(Number(b))]);
+      }
+    }
+    // Value axis (y): the widget models one symmetric +/- window shared by all
+    // three panels, so a drag-zoom on ANY panel's y-axis is captured as that
+    // half-range (largest magnitude of the dragged bounds). This is the only
+    // path that records a mouse y-zoom into state, so without it the zoom is
+    // neither saved nor carried across a session switch. Autorange clears it.
+    for (const ax of ['yaxis', 'yaxis2', 'yaxis3']) {
+      if (e[`${ax}.autorange`]) { setYRange(null); break; }
+      const lo = e[`${ax}.range[0]`];
+      const hi = e[`${ax}.range[1]`];
+      if (lo != null && hi != null) {
+        const half = Math.max(Math.abs(Number(lo)), Math.abs(Number(hi)));
+        setYRange(Math.round(half * 100) / 100);
+        break;
+      }
+    }
+  };
+
+  // Legend toggles drive which overlay's metrics show. We track the on-order so
+  // the last-toggled-on overlay wins; turning one off falls back to the one
+  // beneath it (or the primary run). Returning true keeps Plotly's own
+  // show/hide behaviour.
+  const overlayLabelOf = (e: any): string | null => {
+    const grp = e?.data?.[e?.curveNumber]?.legendgroup as string | undefined;
+    return grp && grp.startsWith('ov-') ? grp.slice(3) : null;
+  };
+  const onLegendClick = (e: any) => {
+    const label = overlayLabelOf(e);
+    if (label == null) return true;                 // primary/hex/ghost: ignore
+    const vis = e.data[e.curveNumber].visible;
+    const visibleNow = vis === true || vis === undefined;
+    setToggledOn((prev) => {
+      const without = prev.filter((l) => l !== label);
+      return visibleNow ? without : [...without, label];
+    });
+    return true;
+  };
+  const onLegendDoubleClick = (e: any) => {
+    // Plotly isolates the clicked trace; mirror that in the metrics selection.
+    const label = overlayLabelOf(e);
+    setToggledOn(label ? [label] : []);
+    return true;
   };
 
   // Hover a KIM/error marker -> show the tooltip below the point and (when the
@@ -499,15 +676,27 @@ export default function KimOverlay({ entry, traces, onToast, onStateSaved }: Pro
 
   const resetToSaved = () => {
     if (!payload) return;
+    // With an overlay active, "default" means: stop overriding it and follow the
+    // primary run again. Otherwise reset the primary view to the saved values.
+    if (activeFolder != null) {
+      setOfflineOffsets((prev) => {
+        const n = { ...prev };
+        delete n[activeFolder];
+        return n;
+      });
+      return;
+    }
     setOffset(payload.saved_offset ?? 0);
     setRanges((payload.saved_ranges ?? []).map((r) => [r[0], r[1]] as Range));
+    setXRange(payload.saved_x_range ?? null);
   };
-  const defaultOffset = payload?.saved_offset ?? 0;
-  const offsetOrigin = payload?.offset_origin ?? null;
+  const defaultOffset = activeFolder != null ? offset : (payload?.saved_offset ?? 0);
+  const offsetOrigin = activeFolder != null
+    ? 'follows primary run' : (payload?.offset_origin ?? null);
 
   const stateBody = (): StateBody => ({
     offset, ranges, y_range: yRange, hex_override: hexOverride,
-    offset_origin: 'manual',
+    offset_origin: 'manual', x_range: xRange, offline_offsets: offlineOffsets,
   });
 
   const saveAll = async () => {
@@ -533,7 +722,22 @@ export default function KimOverlay({ entry, traces, onToast, onStateSaved }: Pro
     setHexOverride(next);
     try {
       await postState(experiment, { ...stateBody(), hex_override: next });
-      onToast(next ? `Hex trace override: ${next}. Reloading.` : 'Hex override cleared. Reloading.');
+      // The server dropped the stale offset and re-fit RMSE on SI against the
+      // new trace; pull the fresh payload so the overlay and offset update.
+      const data = await fetchPayload(experiment);
+      setPayload(data);
+      setOffset(data.saved_offset ?? 0);
+      setRanges((data.saved_ranges ?? []).map((r) => [r[0], r[1]] as Range));
+      setXRange(data.saved_x_range ?? null);
+      const seed: Record<string, number> = {};
+      for (const ov of data.kim_offline ?? []) {
+        if (ov.offset != null) seed[ov.folder] = ov.offset;
+      }
+      setOfflineOffsets(seed);
+      setShowGhost((data.shift_events?.length ?? 0) > 0);
+      onToast(next
+        ? `Hex trace override: ${next} — ${data.offset_origin ?? 'reloaded'}.`
+        : 'Hex override cleared — reloaded.');
       onStateSaved();
     } catch (e) {
       onToast(String(e));
@@ -546,7 +750,7 @@ export default function KimOverlay({ entry, traces, onToast, onStateSaved }: Pro
   // Step the offset by a fixed amount, clamped to the slider range and rounded to
   // the slider grid so repeated presses do not accumulate float drift.
   const nudge = (d: number) =>
-    setOffset((o) => Math.min(OFFSET_MAX, Math.max(OFFSET_MIN, Math.round((o + d) * 100) / 100)));
+    setActiveOffset((o) => Math.min(OFFSET_MAX, Math.max(OFFSET_MIN, Math.round((o + d) * 100) / 100)));
   const stepLabel = (d: number) => {
     const a = Math.abs(d);
     const mag = a >= 1 ? `${a} s` : `${Math.round(a * 1000)} ms`;
@@ -581,6 +785,9 @@ export default function KimOverlay({ entry, traces, onToast, onStateSaved }: Pro
             useResizeHandler
             style={{ width: '100%', height: `${height}px` }}
             onSelected={onSelected}
+            onRelayout={onRelayout}
+            onLegendClick={onLegendClick}
+            onLegendDoubleClick={onLegendDoubleClick}
             onHover={onPointHover}
             onUnhover={onPointUnhover}
             onInitialized={(_f: any, gd: any) => { graphDivRef.current = gd; }}
@@ -589,7 +796,7 @@ export default function KimOverlay({ entry, traces, onToast, onStateSaved }: Pro
           {tip && <PointTip tip={tip} colors={colors} />}
         </div>
         <div style={{ width: 340, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <MetricsPanel rows={metrics.rows} n={metrics.n} totalDt={metrics.totalDt} source={metrics.source} mono={colors.mono} />
+          <MetricsPanel rows={metrics.rows} n={metrics.n} totalDt={metrics.totalDt} source={metrics.source} mono={colors.mono} color={metrics.color} />
           {(entry.has_frames || frames) && (
             <FramePanel
               base={framesBase}
@@ -615,17 +822,22 @@ export default function KimOverlay({ entry, traces, onToast, onStateSaved }: Pro
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minWidth: 320 }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ color: 'var(--muted)' }}>Time offset</span>
+            <span style={{ color: 'var(--muted)' }}>
+              Time offset
+              {activeFolder != null && (
+                <span style={{ color: metrics.color, marginLeft: 6 }}>· {activeOverlay}</span>
+              )}
+            </span>
             <input
               type="range"
               min={OFFSET_MIN}
               max={OFFSET_MAX}
               step={OFFSET_STEP}
-              value={offset}
-              onChange={(e) => setOffset(Number(e.target.value))}
-              style={{ flex: 1, accentColor: 'var(--orange)' }}
+              value={activeOffset}
+              onChange={(e) => setActiveOffset(Number(e.target.value))}
+              style={{ flex: 1, accentColor: activeFolder != null ? metrics.color : 'var(--orange)' }}
             />
-            <span style={{ width: 92, textAlign: 'right' }}>{fmtOffset(offset)}</span>
+            <span style={{ width: 92, textAlign: 'right' }}>{fmtOffset(activeOffset)}</span>
           </label>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 13, color: 'var(--muted)' }}>
             <button
@@ -905,12 +1117,14 @@ function MetricsPanel({
   totalDt,
   source,
   mono,
+  color,
 }: {
   rows: { name: string; mean: number; std: number; p5: number; p95: number }[];
   n: number;
   totalDt: number;
   source: string;
   mono: string;
+  color: string;   // accent (left border + 3D label) = active trace's colour
 }) {
   return (
     <div
@@ -918,7 +1132,7 @@ function MetricsPanel({
         width: '100%',
         background: 'var(--paper-warm)',
         border: '1px solid var(--line)',
-        borderLeft: '4px solid var(--orange)',
+        borderLeft: `4px solid ${color}`,
         padding: '16px 18px',
         fontFamily: mono,
         fontSize: 14,
@@ -943,15 +1157,19 @@ function MetricsPanel({
           </tr>
         </thead>
         <tbody>
-          {rows.map((r) => (
-            <tr key={r.name} style={{ textAlign: 'right' }}>
-              <td style={{ textAlign: 'left', color: r.name === '3D' ? 'var(--orange)' : 'inherit' }}>{r.name}</td>
-              <td>{f3(r.mean)}</td>
-              <td>{s3(r.std)}</td>
-              <td>{f3(r.p5)}</td>
-              <td>{f3(r.p95)}</td>
-            </tr>
-          ))}
+          {rows.map((r) => {
+            const meanFail = r.name !== '3D' && Math.abs(r.mean) > 1;
+            const stdFail = r.name !== '3D' && r.std > 2;
+            return (
+              <tr key={r.name} style={{ textAlign: 'right' }}>
+                <td style={{ textAlign: 'left', color: r.name === '3D' ? color : 'inherit' }}>{r.name}</td>
+                <td style={meanFail ? { color: '#c0392b' } : undefined}>{f3(r.mean)}</td>
+                <td style={stdFail ? { color: '#c0392b' } : undefined}>{s3(r.std)}</td>
+                <td>{f3(r.p5)}</td>
+                <td>{f3(r.p95)}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
       <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 10 }}>

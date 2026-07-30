@@ -5,11 +5,27 @@ export type ShiftEvent = { t_after: number; lr: number; si: number; ap: number }
 
 export type CentroidInfo = { file: string; lr: number; si: number; ap: number };
 
+// An offline-reprocessed trajectory (a nested kim-log* folder), overlaid on the
+// primary online run and sharing its timebase, centroid offset and couch shifts.
+export type OfflineOverlay = {
+  label: string;    // legend label (e.g. "pdf480")
+  folder: string;   // source folder name, shown as the metrics Source
+  t: number[];
+  lr: number[];
+  si: number[];
+  ap: number[];
+  file_index: number[];
+  gantry?: number[];
+  offset?: number | null;  // saved per-overlay time offset (s); null = follow primary
+};
+
 export type ServerPayload = OverlayPayload & {
   file_index: number[];
   shift_events: ShiftEvent[];
   offset_origin: string;
   centroid: CentroidInfo;
+  saved_x_range?: [number, number] | null;
+  kim_offline?: OfflineOverlay[];
 };
 
 export type ManifestEntry = {
@@ -41,6 +57,8 @@ export type StateBody = {
   y_range?: number | null;
   hex_override?: string | null;
   offset_origin?: string;
+  x_range?: [number, number] | null;
+  offline_offsets?: Record<string, number> | null;
 };
 
 async function get<T>(url: string): Promise<T> {

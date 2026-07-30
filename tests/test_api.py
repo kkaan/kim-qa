@@ -3,12 +3,16 @@ import base64
 from pathlib import Path
 from urllib.parse import quote
 
+import numpy as np
 from fastapi.testclient import TestClient
 
 from kim_qa.server.config import ServerConfig
 from kim_qa.server.app import create_app
 from kim_qa.server.state import load_state
-from tests.fixtures import make_interrupt_session, make_motion_session, write_hex_trace
+from tests.fixtures import (
+    make_interrupt_session, make_motion_session, write_centroid_file,
+    write_ga_file, write_hex_trace,
+)
 
 
 def make_client(tmp_path: Path) -> TestClient:
@@ -122,6 +126,23 @@ def test_state_and_save(tmp_path):
     assert (tmp_path / "summary.md").exists()
 
 
+def test_x_range_persists_to_payload(tmp_path):
+    """The time-axis zoom (x_range, true time) round-trips state -> payload."""
+    client = full_client(tmp_path)
+    r = client.post(f"/api/experiments/{quote(MOTION_ID)}/state",
+                    json={"offset": 0.0, "ranges": [], "x_range": [2.5, 18.0]})
+    assert r.status_code == 200
+    assert load_state(tmp_path)[MOTION_ID]["x_range"] == [2.5, 18.0]
+    p = client.get(f"/api/experiments/{quote(MOTION_ID)}/payload").json()
+    assert p["saved_x_range"] == [2.5, 18.0]
+
+    # Clearing it (double-click autorange on the client) returns the default view.
+    client.post(f"/api/experiments/{quote(MOTION_ID)}/state",
+                json={"offset": 0.0, "ranges": [], "x_range": None})
+    p2 = client.get(f"/api/experiments/{quote(MOTION_ID)}/payload").json()
+    assert p2["saved_x_range"] is None
+
+
 def test_vendor_change_reflected_in_payload(tmp_path):
     client = full_client(tmp_path)
     ap1 = client.get(f"/api/experiments/{quote(INTERRUPT_ID)}/payload").json()[
@@ -130,6 +151,115 @@ def test_vendor_change_reflected_in_payload(tmp_path):
     ap2 = client.get(f"/api/experiments/{quote(INTERRUPT_ID)}/payload").json()[
         "shift_events"][0]["ap"]
     assert ap1 == -ap2
+
+
+def test_hex_override_drops_stale_offset_and_refits_si(tmp_path):
+    """Selecting a trace for a session that had no match must re-run the SI
+    RMSE auto-fit, not keep the static offset of 0."""
+    traces = tmp_path / "Motion traces"
+    traces.mkdir(exist_ok=True)
+    write_hex_trace(traces / "t_Prostate_Continuous_Drift.txt", n=2500)
+
+    # Name matches no PAIR_MAP entry -> classified static, but the KIM data is
+    # actually sampled from the trace above at a +3.0 s offset.
+    name = "liver-transient,Test_1619"
+    sess = tmp_path / name
+    sess.mkdir()
+    t = np.arange(120) * 0.25
+    u = t + 3.0
+    si = 2.0 * np.sin(2 * np.pi * 0.2 * u) + 0.1 * u
+    lr = 0.2 * np.sin(2 * np.pi * 0.1 * u)
+    ap = 0.5 * np.sin(2 * np.pi * 0.15 * u)
+    g = np.linspace(180.0, 100.0, len(t))
+    write_ga_file(sess / "MarkerLocationsGA_CouchShift_0.txt", t, ap, lr, si, g)
+    write_centroid_file(sess / "Phantom_Centroid.txt")
+
+    client = TestClient(create_app(ServerConfig(root=tmp_path)))
+    ident = quote(name)
+
+    # Starts static: no trace paired, offset 0.
+    assert client.get(f"/api/experiments/{ident}/payload").json()["kind"] == "static"
+
+    # A no-op state save (no override change) keeps the offset.
+    client.post(f"/api/experiments/{ident}/state",
+                json={"offset": 0.0, "ranges": [], "hex_override": None})
+    assert load_state(tmp_path)[name]["offset"] == 0.0
+
+    # Now select the trace: the override changes -> the stale offset is dropped.
+    client.post(f"/api/experiments/{ident}/state",
+                json={"offset": 0.0, "ranges": [], "offset_origin": "manual",
+                      "hex_override": "t_Prostate_Continuous_Drift.txt"})
+    entry = load_state(tmp_path)[name]
+    assert "offset" not in entry and "offset_origin" not in entry
+    assert entry["hex_override"] == "t_Prostate_Continuous_Drift.txt"
+
+    # The rebuilt payload is now motion and re-fit on SI, recovering ~+3 s.
+    p = client.get(f"/api/experiments/{ident}/payload").json()
+    assert p["kind"] == "motion"
+    assert "SI" in p["offset_origin"]
+    assert abs(p["saved_offset"] - 3.0) < 0.3
+
+
+def test_offline_overlay_detected_and_in_payload(tmp_path):
+    """A nested kim-log* folder is auto-overlaid: the payload carries a
+    kim_offline entry, labelled by the folder, sharing the primary timebase."""
+    traces = tmp_path / "Motion traces"
+    traces.mkdir(exist_ok=True)
+    make_motion_session(tmp_path, traces)          # -> MOTION_ID, no overlay yet
+
+    off = tmp_path / MOTION_ID / "kim-log-pdf480"
+    off.mkdir()
+    t = np.arange(120) * 0.25
+    u = t + 3.0
+    write_ga_file(off / "MarkerLocationsGA_CouchShift_0.txt", t,
+                  0.5 * np.sin(2 * np.pi * 0.15 * u), 0.2 * np.sin(2 * np.pi * 0.1 * u),
+                  2.0 * np.sin(2 * np.pi * 0.2 * u) + 0.1 * u, np.linspace(180, 100, 120))
+
+    client = TestClient(create_app(ServerConfig(root=tmp_path)))
+    p = client.get(f"/api/experiments/{quote(MOTION_ID)}/payload").json()
+    assert len(p.get("kim_offline", [])) == 1
+    ov = p["kim_offline"][0]
+    assert ov["label"] == "pdf480" and ov["folder"] == "kim-log-pdf480"
+    assert len(ov["t"]) == 120 and "gantry" in ov
+    assert {"t", "lr", "si", "ap"} <= ov.keys()
+
+
+def test_offline_offset_persists_to_overlay(tmp_path):
+    """A per-overlay time offset round-trips: state.offline_offsets keyed by
+    folder -> the overlay's `offset` in the payload. Unset stays null so the
+    client falls back to the primary run's offset."""
+    traces = tmp_path / "Motion traces"
+    traces.mkdir(exist_ok=True)
+    make_motion_session(tmp_path, traces)
+
+    off = tmp_path / MOTION_ID / "kim-log-pdf480"
+    off.mkdir()
+    t = np.arange(120) * 0.25
+    write_ga_file(off / "MarkerLocationsGA_CouchShift_0.txt", t,
+                  0.5 * np.sin(t), 0.2 * np.sin(t), 2.0 * np.sin(t),
+                  np.linspace(180, 100, 120))
+
+    client = TestClient(create_app(ServerConfig(root=tmp_path)))
+    ident = quote(MOTION_ID)
+
+    # Unset: the overlay follows the primary offset (offset is null).
+    p0 = client.get(f"/api/experiments/{ident}/payload").json()
+    assert p0["kim_offline"][0]["offset"] is None
+
+    # Save an independent offset for that folder; it lands in the payload.
+    client.post(f"/api/experiments/{ident}/state",
+                json={"offset": 0.0, "ranges": [],
+                      "offline_offsets": {"kim-log-pdf480": 4.25}})
+    assert load_state(tmp_path)[MOTION_ID]["offline_offsets"] == {
+        "kim-log-pdf480": 4.25}
+    p1 = client.get(f"/api/experiments/{ident}/payload").json()
+    assert p1["kim_offline"][0]["offset"] == 4.25
+
+
+def test_no_offline_overlay_without_kim_log_folder(tmp_path):
+    client = full_client(tmp_path)
+    p = client.get(f"/api/experiments/{quote(MOTION_ID)}/payload").json()
+    assert "kim_offline" not in p
 
 
 def test_cli_parse_args():

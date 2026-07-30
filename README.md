@@ -62,7 +62,8 @@ D:\KIM\2026-06-23\                          <- the results root you pick at laun
 │  ├─ MarkerLocationsGA_CouchShift_0.txt       primary log: positions + gantry (_1, _2, ... after interrupts)
 │  ├─ MarkerLocations_CouchShift_0.txt         fallback when the GA log is absent
 │  ├─ couchShifts.txt                          optional - interrupt sessions
-│  └─ KIM-KV\                                  optional - kV frames for hover preview
+│  ├─ KIM-KV\                                  optional - kV frames for hover preview
+│  └─ kim-log-pdf480\                          optional - offline reprocessing, overlaid as a legend toggle
 └─ lung-typical, ...\
 ```
 
@@ -72,6 +73,12 @@ Session folder names drive classification: a name containing e.g. `prostate` +
 folders are treated as static. The match can be overridden per session in the
 app, and a different traces location can be given with `--traces-root`.
 
+Offline-reprocessed runs are overlaid as legend toggles when their folder name
+starts with `kim-log` (e.g. `kim-log-pdf480`) and holds its own KIM log. Unlike
+the primary log, these overlay folders must be **immediate children of the
+session folder** — one nested deeper (e.g. inside `KIM-KV/`) is not picked up.
+Move it up to the session root to have it plotted.
+
 | Path | Purpose |
 | --- | --- |
 | `MarkerLocationsGA_CouchShift_*.txt` | KIM trajectory logs, primary source (positions + gantry). |
@@ -79,6 +86,7 @@ app, and a different traces location can be given with `--traces-root`.
 | `*centroid*.txt` (required) | 1–3 seed/marker lines + isocentre, in cm. Per session or shared at the root; the expected centroid offset from iso is subtracted before analysis (all-zero file for a marker at isocentre). |
 | `couchShifts.txt` (optional) | Commanded couch movements (VRT, LNG, LAT). |
 | `KIM-KV/` (optional) | kV frames, shown on hover behind each detection. |
+| `kim-log-*/` (optional) | Offline-reprocessed run, overlaid as a legend toggle. Must be an immediate child of the session folder. |
 | `Motion traces/` (motion sessions) | HexaMotion / 6DoF-robot ground-truth traces. |
 
 Coordinate convention: centroid files use `(X, Y, Z)` in cm; the app works

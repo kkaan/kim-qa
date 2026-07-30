@@ -2,8 +2,12 @@
 
 State schema, one entry per session id:
     {"offset": float, "ranges": [[lo, hi], ...], "y_range": float | None,
-     "hex_override": str | None, "offset_origin": str}
-Unknown keys written by other tools are preserved on update.
+     "hex_override": str | None, "offset_origin": str,
+     "x_range": [lo, hi] | None, "offline_offsets": {folder: float} | None}
+"x_range" is the persisted time-axis zoom in true (uncompressed) time, or null
+for the default view. "offline_offsets" maps each offline overlay's source
+folder name to its own time offset in seconds (independent of the primary run's
+offset). Unknown keys written by other tools are preserved on update.
 
 A reserved top-level "_config" entry holds per-root settings, currently
 {"vendor": "Elekta" | "Varian"}. Session ids are folder names and discovery
@@ -35,10 +39,13 @@ def load_state(root: Path) -> dict:
         return {}
 
 
-def update_entry(root: Path, session_id: str, entry: dict) -> dict:
+def update_entry(root: Path, session_id: str, entry: dict,
+                 drop: tuple[str, ...] = ()) -> dict:
     state = load_state(root)
     merged = dict(state.get(session_id, {}))
     merged.update(entry)
+    for key in drop:               # forget stale keys (e.g. an offset fit to a
+        merged.pop(key, None)      # trace that has just been replaced)
     state[session_id] = merged
     (Path(root) / STATE_FILENAME).write_text(
         json.dumps(state, indent=2), encoding="utf-8")
@@ -53,6 +60,18 @@ def load_vendor(root: Path) -> str | None:
 
 def save_vendor(root: Path, vendor: str) -> None:
     update_entry(root, CONFIG_KEY, {"vendor": vendor})
+
+
+def _fail_mean(v: float) -> bool:
+    return abs(v) > 1.0
+
+
+def _fail_std(v: float) -> bool:
+    return v > 2.0
+
+
+def _red(s: str) -> str:
+    return f'<span style="color:#c0392b">{s}</span>'
 
 
 def _payload_metrics(payload: dict, entry: dict):
@@ -92,7 +111,16 @@ def regenerate_summary(root: Path, sessions: list, vendor: str) -> Path:
         if res.n < 2:
             cells = ["n<2"] * 4
         else:
-            cells = [f"{r['mean']:+.2f}±{r['std']:.2f}" for r in rows]
+            cells = []
+            for r in rows:
+                mean_s = f"{r['mean']:+.2f}"
+                std_s = f"{r['std']:.2f}"
+                if r["name"] != "3D":
+                    if _fail_mean(r["mean"]):
+                        mean_s = _red(mean_s)
+                    if _fail_std(r["std"]):
+                        std_s = _red(std_s)
+                cells.append(f"{mean_s}±{std_s}")
         lines.append(
             f"| {sess.id} | {sess.kind} | {float(entry.get('offset', 0)):+.2f} | "
             f"{len(entry.get('ranges', []))} | "
@@ -123,8 +151,15 @@ def regenerate_summary(root: Path, sessions: list, vendor: str) -> Path:
             lines.append("| Axis | Mean (mm) | Std (mm) | p5 (mm) | p95 (mm) |")
             lines.append("|---|---|---|---|---|")
             for r in rows:
-                lines.append(f"| {r['name']} | {r['mean']:+.3f} | "
-                             f"{r['std']:.3f} | {r['p5']:+.3f} | {r['p95']:+.3f} |")
+                mean_s = f"{r['mean']:+.3f}"
+                std_s = f"{r['std']:.3f}"
+                if r["name"] != "3D":
+                    if _fail_mean(r["mean"]):
+                        mean_s = _red(mean_s)
+                    if _fail_std(r["std"]):
+                        std_s = _red(std_s)
+                lines.append(f"| {r['name']} | {mean_s} | "
+                             f"{std_s} | {r['p5']:+.3f} | {r['p95']:+.3f} |")
             lines.append("")
     out = root / SUMMARY_FILENAME
     out.write_text("\n".join(lines), encoding="utf-8")

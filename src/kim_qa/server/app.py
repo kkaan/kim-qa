@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from .config import ServerConfig
 from .discovery import discover_sessions, list_traces
 from .frames import build_frame_index, render_frame_png
-from .payloads import build_overlay_payload
+from .payloads import build_manifest_entries, build_overlay_payload
 from .state import load_state, regenerate_summary, save_vendor, update_entry
 
 
@@ -26,12 +26,24 @@ class StateBody(BaseModel):
     y_range: Optional[float] = None
     hex_override: Optional[str] = None
     offset_origin: Optional[str] = None
+    # Persisted time-axis zoom/pan as [lo, hi] in TRUE time (like ranges), or
+    # null for the default view. Forward-mapped through the display squash by
+    # the client on apply.
+    x_range: Optional[list[float]] = None
+    # Per-offline-overlay time offset in seconds, keyed by the overlay's source
+    # folder name (e.g. {"kim-log-pdf480": 41.2}). Each offline replay has its
+    # own timebase, so it aligns to the hex independently of the primary run's
+    # offset; an absent folder falls back to the primary offset on the client.
+    offline_offsets: Optional[dict] = None
 
     def entry(self) -> dict:
         e = {"offset": self.offset, "ranges": self.ranges,
-             "y_range": self.y_range, "hex_override": self.hex_override}
+             "y_range": self.y_range, "hex_override": self.hex_override,
+             "x_range": self.x_range}
         if self.offset_origin is not None:
             e["offset_origin"] = self.offset_origin
+        if self.offline_offsets is not None:
+            e["offline_offsets"] = self.offline_offsets
         return e
 
 
@@ -87,27 +99,10 @@ def create_app(config: ServerConfig) -> FastAPI:
     @app.get("/api/manifest")
     def manifest():
         state = load_state(config.root)
-        entries = []
-        for sess in sessions_by_id().values():
-            entry = state.get(sess.id, {})
-            entries.append({
-                "id": sess.id,
-                "kind": sess.kind,
-                "hex_file": sess.hex_file.name if sess.hex_file else None,
-                "centroid_file": (sess.centroid_file.name
-                                  if sess.centroid_file else None),
-                "has_frames": sess.has_frames,
-                "has_couch_shifts": sess.has_couch_shifts,
-                "saved_offset": entry.get("offset"),
-                "saved_ranges": entry.get("ranges", []),
-                "offset_origin": entry.get("offset_origin"),
-                "y_range": entry.get("y_range"),
-                "hex_override": entry.get("hex_override"),
-                "error": sess.error,
-            })
         return {"session": config.root.name,
                 "traces": list_traces(config.traces_root),
-                "experiments": entries}
+                "experiments": build_manifest_entries(
+                    sessions_by_id().values(), state)}
 
     @app.get("/api/experiments/{exp_id}/payload")
     def payload(exp_id: str):
@@ -138,7 +133,14 @@ def create_app(config: ServerConfig) -> FastAPI:
     @app.post("/api/experiments/{exp_id}/state")
     def post_state(exp_id: str, body: StateBody):
         get_session(exp_id)
-        state = update_entry(config.root, exp_id, body.entry())
+        prev = load_state(config.root).get(exp_id, {})
+        entry = body.entry()
+        # A changed hex-trace override invalidates any saved offset — it was fit
+        # to the old trace. Drop it so the next payload rebuild re-runs the RMSE
+        # auto-fit (SI) against the newly selected trace.
+        drop = (("offset", "offset_origin")
+                if entry.get("hex_override") != prev.get("hex_override") else ())
+        state = update_entry(config.root, exp_id, entry, drop=drop)
         app.state.cache.clear()          # hex_override may change payloads
         return state[exp_id]
 
