@@ -347,7 +347,8 @@
     <div class="card step cy">
       <div class="num" style="color: var(--cyan);">DYNAMIC</div>
       <h3>Motion trace</h3>
-      <p>KIM tracking against a moving HexaMotion trace, RMSE-aligned in time. Reports the
+      <p>KIM tracking against a known ground truth &mdash; a HexaMotion or robot trace, or a
+      baseline KIM acquisition &mdash; RMSE-aligned in time on the most active axis. Reports the
       per-axis deviation (mean, SD, 5th and 95th percentiles) and a pass/fail verdict.</p>
       <span class="crit">Pass: <span>|mean| &le; 1 mm</span> and <span>SD &le; 2 mm</span></span>
     </div>
@@ -392,6 +393,15 @@
         time offset by RMSE or nudge it by hand, drag on a panel to select an analysis window,
         and read live per-axis metrics (mean, SD, 5th and 95th percentiles, plus 3D) as you
         adjust. Switch to residual mode to see the error directly.</p>
+      </div>
+      <div class="card">
+        <h3>Baseline comparisons</h3>
+        <p>Pick any ground truth from the dropdown: a HexaMotion trace, a robot file, or a
+        <b>baseline KIM acquisition</b> from a <code>Baselines</code> folder &mdash; ideal for
+        comparing a new tracking-software version against a known-good run. Same-fraction
+        replays can be aligned exactly with one click via the shared gantry angle
+        (<i>gantry remap</i>), and when a session holds several logs, a <i>test trace</i>
+        picker chooses which one is under review.</p>
       </div>
       <div class="card cy">
         <h3>kV frame preview</h3>
@@ -468,18 +478,23 @@
 &#9500;&#9472; <b>PHANTOM_ROBOT_Centroid.txt</b>               <i>&larr; shared centroid file (a session-local copy overrides it)</i>
 &#9500;&#9472; <b>Motion traces\</b>                           <i>&larr; ground-truth traces (any nesting inside)</i>
 &#9474;  &#9492;&#9472; hexamotion-prostate\t_Prostate_Continuous_Drift.txt
+&#9500;&#9472; <b>Baselines\</b>                               <i>&larr; baseline KIM acquisitions (ground truth for version QA)</i>
+&#9474;  &#9492;&#9472; 2026_06_17-pat03\MarkerLocationsGA_CouchShift_0.txt
 &#9500;&#9472; <b>Prostate-Continuous-interrupt, ...\</b>      <i>&larr; one folder per session; the name picks the trace</i>
 &#9474;  &#9500;&#9472; MarkerLocationsGA_CouchShift_0.txt   <i>primary log: positions + gantry (_1, _2, ... after interrupts)</i>
 &#9474;  &#9500;&#9472; MarkerLocations_CouchShift_0.txt     <i>fallback when the GA log is absent</i>
 &#9474;  &#9500;&#9472; couchShifts.txt                      <i>optional &mdash; interrupt sessions</i>
-&#9474;  &#9492;&#9472; KIM-KV\                              <i>optional &mdash; kV frames for hover preview</i>
+&#9474;  &#9500;&#9472; KIM-KV\                              <i>optional &mdash; kV frames for hover preview</i>
+&#9474;  &#9492;&#9472; kim-log-pdf480\                      <i>optional &mdash; extra KIM log, overlaid as a toggle</i>
 &#9492;&#9472; lung-typical, ...\</pre>
   <p class="lede" style="margin-bottom: 36px;">
-    Session folder names drive classification: a name containing e.g.
+    Session folder names drive the automatic trace match: a name containing e.g.
     <code>prostate</code>&nbsp;+&nbsp;<code>erratic</code> is matched (case-insensitively) to
     <code>t_Prostate_Erratic.txt</code>, searched anywhere under <code>Motion traces</code>;
-    unmatched folders are treated as static. The match can be overridden per session in the app,
-    and a different traces location can be given with <code>--traces-root</code>.
+    unmatched folders open as static until a ground truth is picked in the app &mdash; nothing
+    requires the naming convention. A different traces location can be given with
+    <code>--traces-root</code>, and a different baselines location with
+    <code>--baselines-root</code>.
   </p>
   <div class="io-table">
     <div class="io-row">
@@ -500,15 +515,31 @@
     </div>
     <div class="io-row">
       <div class="name"><code>Motion traces/</code><span class="opt">Motion sessions</span></div>
-      <div class="desc">The HexaMotion / 6DoF-robot ground-truth traces: a 3-column trajectory
-      (implicit 20 ms step) or a 7-column <code>_robot</code> file with explicit timestamps.</div>
+      <div class="desc">The ground-truth traces. Every <code>*.txt</code> inside is selectable
+      from the app's ground-truth dropdown, with the format auto-detected: a 3-column HexaMotion
+      trajectory (implicit 20 ms step) or a robot file with explicit timestamps (whitespace or
+      comma-delimited).</div>
     </div>
     <div class="io-row">
-      <div class="name"><code>*centroid*.txt</code><span class="opt">Required</span></div>
+      <div class="name"><code>Baselines/&lt;name&gt;/</code><span class="opt">Optional</span></div>
+      <div class="desc">Baseline KIM acquisitions, selectable as ground truth for comparing a
+      new tracking-software version against a known-good run. Same-fraction replays can be
+      aligned via the shared gantry angle with the app's <i>gantry remap</i> toggle.</div>
+    </div>
+    <div class="io-row">
+      <div class="name">any subfolder with a KIM log<span class="opt">Optional</span></div>
+      <div class="desc">An extra run of the same session (offline reprocess, another software
+      version) overlaid as a legend toggle with its own time offset &mdash; recognised by
+      contents, not by folder name &mdash; or promoted to the primary trace with the
+      <i>test trace</i> picker.</div>
+    </div>
+    <div class="io-row">
+      <div class="name"><code>*centroid*.txt</code><span class="opt">Optional</span></div>
       <div class="desc">1&ndash;3 seed/marker lines plus the isocentre, in cm. The seed-centroid
       offset from isocentre is subtracted from every KIM trajectory before analysis. Place one
       per session, or a shared one at the results root; for a marker sitting at isocentre use an
-      all-zero file. Multi-marker KIM logs are averaged into the same centroid.</div>
+      all-zero file. Absent = expected offset zero (fine for baseline comparisons, where the
+      shared centroid cancels). Multi-marker KIM logs are averaged into the same centroid.</div>
     </div>
   </div>
   <div class="reg">
