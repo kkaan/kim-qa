@@ -3,7 +3,7 @@ import type { OverlayPayload, Range } from './lib';
 
 export type ShiftEvent = { t_after: number; lr: number; si: number; ap: number };
 
-export type CentroidInfo = { file: string; lr: number; si: number; ap: number };
+export type CentroidInfo = { file: string | null; lr: number; si: number; ap: number };
 
 // An offline-reprocessed trajectory (a nested kim-log* folder), overlaid on the
 // primary online run and sharing its timebase, centroid offset and couch shifts.
@@ -32,6 +32,11 @@ export type ManifestEntry = {
   id: string;
   kind: 'motion' | 'static';
   hex_file: string | null;
+  baseline: string | null;   // baseline KIM-log folder used as ground truth
+  test_log: string;          // current primary log folder ("." = session folder)
+  test_logs: string[];       // selectable candidates
+  test_log_override: string | null;  // saved pick; null = auto
+  gantry_remap: boolean;     // baseline GT remapped onto the test timebase
   centroid_file: string | null;
   has_frames: boolean;
   has_couch_shifts: boolean;
@@ -46,10 +51,16 @@ export type ManifestEntry = {
 export type AppManifest = {
   session: string;
   traces: string[];
+  baselines: string[];
   experiments: ManifestEntry[];
 };
 
-export type AppConfig = { root: string; traces_root: string; vendor: 'Elekta' | 'Varian' };
+export type AppConfig = {
+  root: string;
+  traces_root: string;
+  baselines_root: string;
+  vendor: 'Elekta' | 'Varian';
+};
 
 export type StateBody = {
   offset: number;
@@ -59,6 +70,8 @@ export type StateBody = {
   offset_origin?: string;
   x_range?: [number, number] | null;
   offline_offsets?: Record<string, number> | null;
+  test_log?: string | null;
+  gantry_remap?: boolean | null;
 };
 
 async function get<T>(url: string): Promise<T> {

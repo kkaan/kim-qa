@@ -22,7 +22,7 @@ from kim_qa.metrics import overlay_metrics_table, overlay_residuals
 from kim_qa.version import __version__
 from .config import VENDORS
 from .discovery import Session
-from .payloads import build_overlay_payload, expected_centroid
+from .payloads import build_overlay_payload, expected_centroid, hex_time_axis
 
 STATE_FILENAME = "_overlay_state.json"
 SUMMARY_FILENAME = "summary.md"
@@ -74,22 +74,79 @@ def _red(s: str) -> str:
     return f'<span style="color:#c0392b">{s}</span>'
 
 
-def _payload_metrics(payload: dict, entry: dict):
-    kim = payload["kim"]
+def _hex_arrays(payload: dict, entry: dict):
+    """Ground-truth arrays from the payload (fixed-dt hexamotion or
+    irregular-t baseline KIM), or a flat-zero stand-in spanning the primary
+    KIM run when the session has no ground truth."""
     if "hex" in payload:
         hx = payload["hex"]
-        hex_t = np.arange(hx["n"]) * hx["dt"]
-        hlr, hsi, hap = hx["lr"], hx["si"], hx["ap"]
-    else:
-        t = np.asarray(kim["t"], float)
-        off = float(entry.get("offset", 0.0))
-        hex_t = np.array([t[0] + off - 1.0, t[-1] + off + 1.0])
-        hlr = hsi = hap = np.zeros(2)
+        return hex_time_axis(hx), hx["lr"], hx["si"], hx["ap"]
+    t = np.asarray(payload["kim"]["t"], float)
+    off = float(entry.get("offset", 0.0))
+    hex_t = np.array([t[0] + off - 1.0, t[-1] + off + 1.0])
+    zeros = np.zeros(2)
+    return hex_t, zeros, zeros, zeros
+
+
+def _payload_metrics(payload: dict, entry: dict):
+    kim = payload["kim"]
+    hex_t, hlr, hsi, hap = _hex_arrays(payload, entry)
     res = overlay_residuals(kim["t"], kim["lr"], kim["si"], kim["ap"],
                             hex_t, hlr, hsi, hap,
                             float(entry.get("offset", 0.0)),
                             entry.get("ranges", []))
     return res, overlay_metrics_table(res)
+
+
+def _offline_metrics(payload: dict, entry: dict) -> list:
+    """(overlay, offset_used, res, rows) per offline kim-log* overlay, at its
+    own saved offset or the primary run's when none is saved."""
+    out = []
+    overlays = payload.get("kim_offline") or []
+    if overlays:
+        hex_t, hlr, hsi, hap = _hex_arrays(payload, entry)
+        for ov in overlays:
+            off = ov.get("offset")
+            off = float(entry.get("offset", 0.0)) if off is None else float(off)
+            res = overlay_residuals(ov["t"], ov["lr"], ov["si"], ov["ap"],
+                                    hex_t, hlr, hsi, hap, off,
+                                    entry.get("ranges", []))
+            out.append((ov, off, res, overlay_metrics_table(res)))
+    return out
+
+
+def _overview_cells(res, rows) -> list[str]:
+    """mean±std cells for the overview table, failing axes wrapped in red."""
+    if res.n < 2:
+        return ["n<2"] * 4
+    cells = []
+    for r in rows:
+        mean_s = f"{r['mean']:+.2f}"
+        std_s = f"{r['std']:.2f}"
+        if r["name"] != "3D":
+            if _fail_mean(r["mean"]):
+                mean_s = _red(mean_s)
+            if _fail_std(r["std"]):
+                std_s = _red(std_s)
+        cells.append(f"{mean_s}±{std_s}")
+    return cells
+
+
+def _detail_table(rows) -> list[str]:
+    """Per-axis detail table lines, failing axes wrapped in red."""
+    lines = ["| Axis | Mean (mm) | Std (mm) | p5 (mm) | p95 (mm) |",
+             "|---|---|---|---|---|"]
+    for r in rows:
+        mean_s = f"{r['mean']:+.3f}"
+        std_s = f"{r['std']:.3f}"
+        if r["name"] != "3D":
+            if _fail_mean(r["mean"]):
+                mean_s = _red(mean_s)
+            if _fail_std(r["std"]):
+                std_s = _red(std_s)
+        lines.append(f"| {r['name']} | {mean_s} | "
+                     f"{std_s} | {r['p5']:+.3f} | {r['p95']:+.3f} |")
+    return lines
 
 
 def regenerate_summary(root: Path, sessions: list, vendor: str) -> Path:
@@ -108,59 +165,64 @@ def regenerate_summary(root: Path, sessions: list, vendor: str) -> Path:
             continue
         payload = build_overlay_payload(sess, vendor, entry)
         res, rows = _payload_metrics(payload, entry)
-        if res.n < 2:
-            cells = ["n<2"] * 4
-        else:
-            cells = []
-            for r in rows:
-                mean_s = f"{r['mean']:+.2f}"
-                std_s = f"{r['std']:.2f}"
-                if r["name"] != "3D":
-                    if _fail_mean(r["mean"]):
-                        mean_s = _red(mean_s)
-                    if _fail_std(r["std"]):
-                        std_s = _red(std_s)
-                cells.append(f"{mean_s}±{std_s}")
+        cells = _overview_cells(res, rows)
         lines.append(
             f"| {sess.id} | {sess.kind} | {float(entry.get('offset', 0)):+.2f} | "
             f"{len(entry.get('ranges', []))} | "
             f"{cells[0]} | {cells[1]} | {cells[2]} | {cells[3]} |")
-        details.append((sess, entry, res, rows))
+        offline = _offline_metrics(payload, entry)
+        for ov, off, ores, orows in offline:
+            ocells = _overview_cells(ores, orows)
+            lines.append(
+                f"| {sess.id} / {ov['label']} | offline | {off:+.2f} | "
+                f"{len(entry.get('ranges', []))} | "
+                f"{ocells[0]} | {ocells[1]} | {ocells[2]} | {ocells[3]} |")
+        details.append((sess, entry, res, rows, offline))
 
     lines.append("")
-    for sess, entry, res, rows in details:
+    for sess, entry, res, rows, offline in details:
         lines.append(f"## {sess.id}")
         lines.append("")
         if (sess.folder / "overlay.png").exists():
             lines.append(f"![overlay]({sess.id}/overlay.png)")
             lines.append("")
-        hex_label = sess.hex_file.name if sess.hex_file else "(none, flat-zero)"
+        if sess.baseline_dir is not None:
+            hex_label = f"baseline {sess.baseline_dir.name}"
+            if entry.get("gantry_remap"):
+                hex_label += " (gantry-remapped)"
+        elif sess.hex_file:
+            hex_label = sess.hex_file.name
+        else:
+            hex_label = "(none, flat-zero)"
         lines.append(f"- **Type:** {sess.kind}")
-        lines.append(f"- **Hex trace:** {hex_label}")
+        lines.append(f"- **Ground truth:** {hex_label}")
         if sess.centroid_file is not None:
             cent = expected_centroid(sess)
             lines.append(
                 f"- **Centroid:** {cent['file']} (expected offset subtracted: "
                 f"LR {cent['lr']:+.2f}, SI {cent['si']:+.2f}, "
                 f"AP {cent['ap']:+.2f} mm)")
+        else:
+            lines.append("- **Centroid:** none (offset 0)")
         lines.append(f"- **Time offset:** {float(entry.get('offset', 0)):+.2f} s")
         lines.append(f"- **Ranges:** {len(entry.get('ranges', []))} "
                      f"(n = {res.n})")
         lines.append("")
         if res.n >= 2:
-            lines.append("| Axis | Mean (mm) | Std (mm) | p5 (mm) | p95 (mm) |")
-            lines.append("|---|---|---|---|---|")
-            for r in rows:
-                mean_s = f"{r['mean']:+.3f}"
-                std_s = f"{r['std']:.3f}"
-                if r["name"] != "3D":
-                    if _fail_mean(r["mean"]):
-                        mean_s = _red(mean_s)
-                    if _fail_std(r["std"]):
-                        std_s = _red(std_s)
-                lines.append(f"| {r['name']} | {mean_s} | "
-                             f"{std_s} | {r['p5']:+.3f} | {r['p95']:+.3f} |")
+            lines.extend(_detail_table(rows))
             lines.append("")
+        for ov, off, ores, orows in offline:
+            saved = ov.get("offset") is not None
+            lines.append(f"### Offline: {ov['label']}")
+            lines.append("")
+            lines.append(f"- **Source folder:** {ov['folder']}")
+            lines.append(f"- **Time offset:** {off:+.2f} s "
+                         f"({'independent' if saved else 'follows primary'})")
+            lines.append(f"- **Samples:** n = {ores.n}")
+            lines.append("")
+            if ores.n >= 2:
+                lines.extend(_detail_table(orows))
+                lines.append("")
     out = root / SUMMARY_FILENAME
     out.write_text("\n".join(lines), encoding="utf-8")
     return out

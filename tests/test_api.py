@@ -29,6 +29,7 @@ def test_get_config(tmp_path):
     assert body["vendor"] == "Elekta"
     assert body["root"] == str(tmp_path)
     assert body["traces_root"] == str(tmp_path / "Motion traces")
+    assert body["baselines_root"] == str(tmp_path / "Baselines")
 
 
 def test_post_config_vendor(tmp_path):
@@ -38,6 +39,103 @@ def test_post_config_vendor(tmp_path):
     assert client.get("/api/config").json()["vendor"] == "Varian"
     # Choice persists per root, under the reserved _config state key
     assert load_state(tmp_path)["_config"]["vendor"] == "Varian"
+
+
+def test_manifest_lists_baselines(tmp_path):
+    from tests.fixtures import make_baseline_pair
+    make_baseline_pair(tmp_path)
+    client = make_client(tmp_path)
+    m = client.get("/api/manifest").json()
+    assert m["baselines"] == ["2026_06_17-pat03"]
+    assert {e["id"] for e in m["experiments"]} == {"2026-08-07-Pat03"}
+
+
+def test_baseline_override_round_trip(tmp_path):
+    from tests.fixtures import make_baseline_pair
+    make_baseline_pair(tmp_path)
+    client = make_client(tmp_path)
+    sid = quote("2026-08-07-Pat03", safe="")
+
+    p = client.get(f"/api/experiments/{sid}/payload").json()
+    assert p["kind"] == "static" and "hex" not in p
+
+    r = client.post(f"/api/experiments/{sid}/state",
+                    json={"offset": 0.0, "ranges": [],
+                          "hex_override": "baseline:2026_06_17-pat03"})
+    assert r.status_code == 200
+    assert "offset" not in r.json()          # override change drops offset
+
+    p = client.get(f"/api/experiments/{sid}/payload").json()
+    assert p["kind"] == "motion"
+    assert p["hex"]["source"]["name"] == "2026_06_17-pat03"
+    assert abs(p["saved_offset"] - 0.5) < 0.1     # refit against baseline
+
+    client.post(f"/api/experiments/{sid}/state",
+                json={"offset": 0.0, "ranges": [], "hex_override": None})
+    p = client.get(f"/api/experiments/{sid}/payload").json()
+    assert p["kind"] == "static" and "hex" not in p
+
+
+def test_test_log_round_trip(tmp_path):
+    from tests.fixtures import make_baseline_pair, write_ga_file as wga
+    import numpy as np2
+    make_baseline_pair(tmp_path)
+    sib = tmp_path / "2026-08-07-Pat03" / "log-version-125"
+    sib.mkdir()
+    t = np2.arange(20) * 0.15
+    wga(sib / "MarkerLocationsGA_CouchShift_0.txt",
+        t, t * 0 + 5.0, t * 0, t * 0, np2.linspace(180, 100, 20))
+    client = make_client(tmp_path)
+    sid = quote("2026-08-07-Pat03", safe="")
+
+    m = client.get("/api/manifest").json()
+    entry = m["experiments"][0]
+    assert entry["test_log"] == "log-version-124"
+    assert set(entry["test_logs"]) == {"log-version-124", "log-version-125"}
+
+    r = client.post(f"/api/experiments/{sid}/state",
+                    json={"offset": 3.0, "ranges": [],
+                          "test_log": "log-version-125"})
+    assert r.status_code == 200
+    assert "offset" not in r.json()          # test-trace change drops offset
+
+    p = client.get(f"/api/experiments/{sid}/payload").json()
+    # The chosen log's AP is a constant +5 raw; it is now the primary trace
+    assert abs(p["kim"]["ap"][0] - 5.0) < 1e-6
+    assert "log-version-124" in [o["folder"] for o in p["kim_offline"]]
+
+
+def test_gantry_remap_round_trip(tmp_path):
+    from tests.fixtures import make_baseline_pair
+    make_baseline_pair(tmp_path)
+    client = make_client(tmp_path)
+    sid = quote("2026-08-07-Pat03", safe="")
+    client.post(f"/api/experiments/{sid}/state",
+                json={"offset": 0.0, "ranges": [],
+                      "hex_override": "baseline:2026_06_17-pat03"})
+    client.post(f"/api/experiments/{sid}/state",
+                json={"offset": 1.5, "ranges": [],
+                      "hex_override": "baseline:2026_06_17-pat03",
+                      "offset_origin": "manual"})
+
+    r = client.post(f"/api/experiments/{sid}/state",
+                    json={"offset": 1.5, "ranges": [],
+                          "hex_override": "baseline:2026_06_17-pat03",
+                          "gantry_remap": True})
+    assert "offset" not in r.json()          # remap toggle drops saved offset
+    p = client.get(f"/api/experiments/{sid}/payload").json()
+    assert p["hex"]["remapped"] is True
+    assert p["offset_origin"] == "gantry remap"
+    entry = next(e for e in client.get("/api/manifest").json()["experiments"]
+                 if e["id"] == "2026-08-07-Pat03")
+    assert entry["gantry_remap"] is True
+
+    client.post(f"/api/experiments/{sid}/state",
+                json={"offset": 0.0, "ranges": [],
+                      "hex_override": "baseline:2026_06_17-pat03",
+                      "gantry_remap": False})
+    p = client.get(f"/api/experiments/{sid}/payload").json()
+    assert "remapped" not in p["hex"]
 
 
 def test_vendor_persists_across_restart(tmp_path):

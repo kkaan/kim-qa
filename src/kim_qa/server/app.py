@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .config import ServerConfig
-from .discovery import discover_sessions, list_traces
+from .discovery import discover_sessions, list_baselines, list_traces
 from .frames import build_frame_index, render_frame_png
 from .payloads import build_manifest_entries, build_overlay_payload
 from .state import load_state, regenerate_summary, save_vendor, update_entry
@@ -35,11 +35,17 @@ class StateBody(BaseModel):
     # own timebase, so it aligns to the hex independently of the primary run's
     # offset; an absent folder falls back to the primary offset on the client.
     offline_offsets: Optional[dict] = None
+    # Which candidate log folder is the primary (test) trace; None/"" = auto.
+    test_log: Optional[str] = None
+    # Remap the baseline ground truth onto the test run's timebase via the
+    # shared gantry angle (same-fraction replays have warped time columns).
+    gantry_remap: Optional[bool] = None
 
     def entry(self) -> dict:
         e = {"offset": self.offset, "ranges": self.ranges,
              "y_range": self.y_range, "hex_override": self.hex_override,
-             "x_range": self.x_range}
+             "x_range": self.x_range, "test_log": self.test_log,
+             "gantry_remap": self.gantry_remap}
         if self.offset_origin is not None:
             e["offset_origin"] = self.offset_origin
         if self.offline_offsets is not None:
@@ -75,7 +81,10 @@ def create_app(config: ServerConfig) -> FastAPI:
         state = load_state(config.root)
         overrides = {sid: e["hex_override"] for sid, e in state.items()
                      if isinstance(e, dict) and e.get("hex_override")}
-        return {s.id: s for s in discover_sessions(config, overrides)}
+        test_logs = {sid: e["test_log"] for sid, e in state.items()
+                     if isinstance(e, dict) and e.get("test_log")}
+        return {s.id: s for s in discover_sessions(config, overrides,
+                                                   test_logs)}
 
     def get_session(exp_id: str):
         sess = sessions_by_id().get(exp_id)
@@ -87,6 +96,7 @@ def create_app(config: ServerConfig) -> FastAPI:
     def get_config():
         return {"root": str(config.root),
                 "traces_root": str(config.traces_root),
+                "baselines_root": str(config.baselines_root),
                 "vendor": config.vendor}
 
     @app.post("/api/config")
@@ -101,6 +111,7 @@ def create_app(config: ServerConfig) -> FastAPI:
         state = load_state(config.root)
         return {"session": config.root.name,
                 "traces": list_traces(config.traces_root),
+                "baselines": list_baselines(config.baselines_root),
                 "experiments": build_manifest_entries(
                     sessions_by_id().values(), state)}
 
@@ -135,11 +146,14 @@ def create_app(config: ServerConfig) -> FastAPI:
         get_session(exp_id)
         prev = load_state(config.root).get(exp_id, {})
         entry = body.entry()
-        # A changed hex-trace override invalidates any saved offset — it was fit
-        # to the old trace. Drop it so the next payload rebuild re-runs the RMSE
-        # auto-fit (SI) against the newly selected trace.
+        # A changed ground-truth override or test-trace pick invalidates any
+        # saved offset — it was fit to the old pairing. Drop it so the next
+        # payload rebuild re-runs the RMSE auto-fit.
         drop = (("offset", "offset_origin")
-                if entry.get("hex_override") != prev.get("hex_override") else ())
+                if (entry.get("hex_override") != prev.get("hex_override")
+                    or entry.get("test_log") != prev.get("test_log")
+                    or bool(entry.get("gantry_remap"))
+                    != bool(prev.get("gantry_remap"))) else ())
         state = update_entry(config.root, exp_id, entry, drop=drop)
         app.state.cache.clear()          # hex_override may change payloads
         return state[exp_id]

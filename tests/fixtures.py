@@ -112,6 +112,21 @@ def write_hex_trace(path: Path, n=500, amp_si=2.0):
     path.write_text("".join(lines), encoding="utf-8")
 
 
+def write_robot_trace(path: Path, n=200, comma=False, t0=0.0):
+    """7-column robot trace: col0 = time (s, 40 ms step), col1-3 = X/Y/Z (mm),
+    col4-6 rotations (ignored by the parsers). Whitespace-separated by default,
+    comma-separated when comma=True (exercises the parse_robot_file fallback)."""
+    t = t0 + np.arange(n) * 0.04
+    lr = 0.3 * np.sin(2 * np.pi * 0.1 * t)
+    si = 2.5 * np.sin(2 * np.pi * 0.2 * t)
+    ap = 0.6 * np.sin(2 * np.pi * 0.15 * t)
+    sep = "," if comma else "\t"
+    lines = [sep.join(f"{v:.4f}" for v in (t[i], lr[i], si[i], ap[i], 0, 0, 0))
+             + "\n" for i in range(n)]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(lines), encoding="utf-8")
+
+
 def make_static_session(folder: Path, name="Static,Test_1207"):
     sess = folder / name
     sess.mkdir(parents=True, exist_ok=True)
@@ -120,6 +135,40 @@ def make_static_session(folder: Path, name="Static,Test_1207"):
     write_kim_file(sess / "MarkerLocations_CouchShift_0.txt", t, z + 0.05, z - 0.02, z + 0.01)
     write_centroid_file(sess / "Phantom_Centroid.txt")
     return sess
+
+
+def _waveform(u):
+    """Shared synthetic breathing waveform for baseline/test log pairs."""
+    si = 2.0 * np.sin(2 * np.pi * 0.2 * u) + 0.1 * u
+    lr = 0.2 * np.sin(2 * np.pi * 0.1 * u)
+    ap = 0.5 * np.sin(2 * np.pi * 0.15 * u)
+    return lr, si, ap
+
+
+def make_baseline_pair(root: Path, sess_name="2026-08-07-Pat03",
+                       baseline_name="2026_06_17-pat03", offset=0.5):
+    """RTF version-QA layout: a baseline KIM log in Baselines/<name>/ and a
+    session whose log-under-test sits nested in <sess>/log-version-124/.
+    Both sample the same waveform on irregular (jittered) timestamps; the test
+    log samples it `offset` seconds later, so the RMSE fit should recover
+    `offset`. Deliberately writes NO centroid file anywhere.
+    """
+    b_dir = root / "Baselines" / baseline_name
+    b_dir.mkdir(parents=True, exist_ok=True)
+    i_b = np.arange(160)
+    t_b = i_b * 0.155 + 0.02 * np.sin(1.7 * i_b)      # irregular timebase
+    blr, bsi, bap = _waveform(t_b)
+    write_ga_file(b_dir / "MarkerLocationsGA_CouchShift_0.txt",
+                  t_b, bap, blr, bsi, np.linspace(180.0, 100.0, len(t_b)))
+
+    s_dir = root / sess_name / "log-version-124"
+    s_dir.mkdir(parents=True, exist_ok=True)
+    i_s = np.arange(120)
+    t_s = i_s * 0.15 + 0.015 * np.sin(2.3 * i_s)
+    slr, ssi, sap = _waveform(t_s + offset)
+    write_ga_file(s_dir / "MarkerLocationsGA_CouchShift_0.txt",
+                  t_s, sap, slr, ssi, np.linspace(180.0, 100.0, len(t_s)))
+    return root / sess_name, b_dir
 
 
 def make_motion_session(folder: Path, traces_root: Path,

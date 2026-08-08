@@ -31,13 +31,17 @@ ISO = (1.0, 1.0, 1.0)
 EXPECTED = {"lr": 10.0, "si": 50.0, "ap": -30.0}
 
 
-def test_missing_centroid_is_an_error(tmp_path):
+def test_missing_centroid_falls_back_to_zero(tmp_path):
     make_static_session(tmp_path)
     (tmp_path / "Static,Test_1207" / "Phantom_Centroid.txt").unlink()
     sessions = discover_sessions(ServerConfig(root=tmp_path))
     assert len(sessions) == 1
     assert sessions[0].centroid_file is None
-    assert "centroid" in sessions[0].error.lower()
+    assert sessions[0].error is None
+    payload = build_overlay_payload(sessions[0], "Elekta", None)
+    assert payload["centroid"] == {"file": None, "lr": 0.0, "si": 0.0, "ap": 0.0}
+    # raw fixture values pass through unshifted
+    assert abs(payload["kim"]["lr"][0] - (-0.02)) < 1e-6
 
 
 def test_session_local_wins_over_root(tmp_path):

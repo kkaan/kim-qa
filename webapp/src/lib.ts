@@ -24,13 +24,27 @@ export type Manifest = {
   experiments: ManifestEntry[];
 };
 
+// Ground truth: a fixed-dt hexamotion trace ({dt, n}) or a baseline KIM log
+// on its own irregular timebase ({t}); `source` says which.
+export type HexPayload = {
+  t?: number[];
+  dt?: number;
+  n: number;
+  lr: number[];
+  si: number[];
+  ap: number[];
+  gantry?: number[];
+  remapped?: boolean;   // t is the test run's timebase via shared gantry angle
+  source?: { type: 'hexamotion' | 'baseline'; name: string };
+};
+
 export type OverlayPayload = {
   id: string;
   kind: 'motion' | 'static';
   saved_offset: number;
   saved_ranges: Range[];
   kim: Axes;
-  hex?: { dt: number; n: number; lr: number[]; si: number[]; ap: number[] };
+  hex?: HexPayload;
 };
 
 export type CouchShiftPayload = {
@@ -181,6 +195,14 @@ export function token(name: string, fallback: string): string {
   if (typeof document === 'undefined') return fallback;
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return v || fallback;
+}
+
+/** Ground-truth curve from a payload hex block: explicit irregular `t`
+ *  (baseline KIM ground truth) or the fixed-step reconstruction `i * dt`
+ *  (hexamotion trace). Twin of kim_qa.server.payloads.hex_time_axis. */
+export function hexCurveFromPayload(hex: HexPayload): HexCurve {
+  const t = hex.t ?? Array.from({ length: hex.n }, (_, i) => i * (hex.dt ?? 0));
+  return { t, lr: hex.lr, si: hex.si, ap: hex.ap };
 }
 
 /** Build a flat-zero hex curve spanning a kim time window (static experiments). */

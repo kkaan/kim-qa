@@ -36,10 +36,12 @@ PAIR_MAP = [
     (("liver", "breathhold"), "LiverTraj_LargeSIandAPWithBreathHold.txt"),
 ]
 
-# Per-session offset-alignment axis override: use the axis with the most
-# motion (lung-predominant is left-right dominant, so SI cannot localise it).
-ALIGN_AXIS = [(("lung", "predom"), "LR")]
 
+
+# Sentinel prefix marking a hex_override that names a baseline KIM-log folder
+# (under baselines_root) instead of a hexamotion trace file. ":" cannot occur
+# in a filename, so the sentinel never collides with real trace overrides.
+BASELINE_PREFIX = "baseline:"
 
 @dataclass
 class Session:
@@ -52,38 +54,54 @@ class Session:
     has_couch_shifts: bool
     centroid_file: Optional[Path] = None
     error: Optional[str] = None
-    offline_dirs: list = field(default_factory=list)   # nested kim-log* folders
+    offline_dirs: list = field(default_factory=list)   # extra KIM-log folders
+    baseline_dir: Optional[Path] = None    # KIM-log folder used as ground truth
+    log_dirs: list = field(default_factory=list)       # test-trace candidates
 
 
-def find_offline_dirs(folder: Path, primary_parent: Path) -> list:
-    """Nested offline-reprocessing folders to overlay: immediate subdirectories
-    named 'kim-log*' (case-insensitive, e.g. kim-log-pdf480) that hold a KIM
-    log and are not the folder the primary (online) trace was read from."""
-    out = []
+def _holds_kim_log(folder: Path) -> bool:
+    return ((folder / KIM_FILENAME).exists()
+            or (folder / FALLBACK_KIM_FILENAME).exists()
+            or next(folder.rglob(KIM_FILENAME), None) is not None
+            or next(folder.rglob(FALLBACK_KIM_FILENAME), None) is not None)
+
+
+def _direct_kim_log(folder: Path) -> Optional[Path]:
+    for name in (KIM_FILENAME, FALLBACK_KIM_FILENAME):
+        if (folder / name).exists():
+            return folder / name
+    return None
+
+
+def find_log_dirs(folder: Path) -> list:
+    """Candidate test-trace folders: the session folder itself when it holds a
+    KIM log directly, plus every immediate subfolder holding one. Recognised by
+    contents, not naming conventions."""
+    out = [folder] if _direct_kim_log(folder) is not None else []
     for sub in sorted(folder.iterdir()):
-        if not sub.is_dir() or sub == primary_parent:
-            continue
-        if not sub.name.lower().startswith("kim-log"):
-            continue
-        has_log = ((sub / KIM_FILENAME).exists()
-                   or (sub / FALLBACK_KIM_FILENAME).exists()
-                   or next(sub.rglob(KIM_FILENAME), None) is not None
-                   or next(sub.rglob(FALLBACK_KIM_FILENAME), None) is not None)
-        if has_log:
+        if (sub.is_dir() and not sub.name.startswith(("_", "."))
+                and _holds_kim_log(sub)):
             out.append(sub)
     return out
 
 
+def find_offline_dirs(folder: Path, primary_parent: Path) -> list:
+    """Every candidate log folder except the one the primary (test) trace was
+    read from — shown as toggleable overlays."""
+    return [d for d in find_log_dirs(folder) if d != primary_parent]
+
+
+def list_baselines(baselines_root: Path) -> list[str]:
+    """Baseline candidates: immediate child folders of baselines_root that
+    hold a KIM log, by name."""
+    if not baselines_root.is_dir():
+        return []
+    return sorted(d.name for d in baselines_root.iterdir()
+                  if d.is_dir() and _holds_kim_log(d))
+
+
 def _norm(name: str) -> str:
     return name.lower().replace(" ", "")
-
-
-def align_axis_for(name: str) -> str:
-    key = _norm(name)
-    for subs, axis in ALIGN_AXIS:
-        if all(s in key for s in subs):
-            return axis
-    return "SI"
 
 
 def find_centroid_file(*folders: Optional[Path]) -> Optional[Path]:
@@ -110,31 +128,65 @@ def find_trace(traces_root: Path, filename: str) -> Optional[Path]:
 
 
 def list_traces(traces_root: Path) -> list[str]:
+    """Every *.txt under the traces root, by basename. Naming conventions are
+    not enforced — robot files and arbitrarily named traces are selectable;
+    the reader auto-detects the format."""
     if not traces_root.exists():
         return []
-    names = {p.name for pat in ("t_*.txt", "LiverTraj_*.txt")
-             for p in traces_root.rglob(pat)}
-    return sorted(names)
+    return sorted({p.name for p in traces_root.rglob("*.txt") if p.is_file()})
 
 
-def _classify(name: str, traces_root: Path,
-              override: Optional[str]) -> tuple[str, Optional[Path]]:
-    if override:
-        p = find_trace(traces_root, override)
+def _classify(name: str, config: ServerConfig,
+              override: Optional[str]) -> tuple[str, Optional[Path], Optional[Path]]:
+    """Returns (kind, hex_file, baseline_dir). An override naming a baseline
+    (``baseline:<folder>``) or trace that no longer resolves falls through to
+    the PAIR_MAP name matching, same as no override."""
+    if override and override.startswith(BASELINE_PREFIX):
+        d = config.baselines_root / override[len(BASELINE_PREFIX):]
+        if d.is_dir() and _holds_kim_log(d):
+            return "motion", None, d
+    elif override:
+        p = find_trace(config.traces_root, override)
         if p is not None:
-            return "motion", p
+            return "motion", p, None
     key = _norm(name)
     for subs, trace_name in PAIR_MAP:
         if all(s in key for s in subs):
-            p = find_trace(traces_root, trace_name)
+            p = find_trace(config.traces_root, trace_name)
             if p is not None:
-                return "motion", p
-            return "static", None      # matched but trace file missing
-    return "static", None
+                return "motion", p, None
+            return "static", None, None   # matched but trace file missing
+    return "static", None, None
+
+
+def _pick_kim_file(folder: Path, log_dirs: list,
+                   chosen: Optional[str]) -> Optional[Path]:
+    """The primary (test) trace's log file. `chosen` names a candidate folder
+    from log_dirs ("." = the session folder itself); unknown or absent falls
+    back to the automatic direct-then-recursive search."""
+    if chosen:
+        for d in log_dirs:
+            if chosen == ("." if d == folder else d.name):
+                direct = _direct_kim_log(d)
+                if direct is not None:
+                    return direct
+                for name in (KIM_FILENAME, FALLBACK_KIM_FILENAME):
+                    nested = sorted(d.rglob(name))
+                    if nested:
+                        return nested[0]
+    direct = _direct_kim_log(folder)
+    if direct is not None:
+        return direct
+    for name in (KIM_FILENAME, FALLBACK_KIM_FILENAME):
+        nested = sorted(folder.rglob(name))
+        if nested:
+            return nested[0]
+    return None
 
 
 def discover_sessions(config: ServerConfig,
-                      overrides: Optional[dict] = None) -> list[Session]:
+                      overrides: Optional[dict] = None,
+                      test_logs: Optional[dict] = None) -> list[Session]:
     overrides = overrides or {}
     out: list[Session] = []
     if not config.root.exists():
@@ -142,21 +194,15 @@ def discover_sessions(config: ServerConfig,
     for folder in sorted(config.root.iterdir()):
         if not folder.is_dir() or folder.name.startswith(("_", ".")):
             continue
-        if folder == config.traces_root:
+        if folder in (config.traces_root, config.baselines_root):
             continue
-        kim_file = None
-        for name in (KIM_FILENAME, FALLBACK_KIM_FILENAME):
-            if (folder / name).exists():
-                kim_file = folder / name
-                break
-            nested = sorted(folder.rglob(name))
-            if nested:
-                kim_file = nested[0]
-                break
+        log_dirs = find_log_dirs(folder)
+        kim_file = _pick_kim_file(folder, log_dirs,
+                                  (test_logs or {}).get(folder.name))
         if kim_file is None:
             continue
-        kind, hex_path = _classify(folder.name, config.traces_root,
-                                   overrides.get(folder.name))
+        kind, hex_path, baseline_dir = _classify(folder.name, config,
+                                                 overrides.get(folder.name))
         sess = Session(
             id=folder.name,
             folder=folder,
@@ -168,14 +214,15 @@ def discover_sessions(config: ServerConfig,
             centroid_file=find_centroid_file(kim_file.parent, folder,
                                              config.root),
             offline_dirs=find_offline_dirs(folder, kim_file.parent),
+            baseline_dir=baseline_dir,
+            log_dirs=log_dirs,
         )
         try:
             # Parse eagerly enough to surface unreadable folders in the UI.
-            if sess.centroid_file is None:
-                raise FileNotFoundError(
-                    "No centroid file (*centroid*.txt) in the session folder "
-                    "or results root - one is required")
-            parse_centroid_file(sess.centroid_file)
+            # A missing centroid file is allowed: expected offset falls back
+            # to zero (correct for test-vs-baseline where it cancels).
+            if sess.centroid_file is not None:
+                parse_centroid_file(sess.centroid_file)
             read_kim_segments(kim_file.parent)
         except Exception as e:  # noqa: BLE001 - surfaced to the client
             sess.error = str(e)

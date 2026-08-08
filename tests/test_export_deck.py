@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from tests.fixtures import make_motion_session, write_ga_file
+from tests.fixtures import make_baseline_pair, make_motion_session, write_ga_file
 
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
 
@@ -50,3 +50,23 @@ def test_export_writes_rich_payloads_and_manifest(tmp_path):
     assert {"kim", "shift_events", "centroid", "file_index"} <= payload.keys()
     assert len(payload.get("kim_offline", [])) == 1
     assert payload["kim_offline"][0]["label"] == "pdf480"
+
+
+def test_export_baseline_gt_session(tmp_path):
+    make_baseline_pair(tmp_path)
+    (tmp_path / "_overlay_state.json").write_text(json.dumps({
+        "2026-08-07-Pat03": {"offset": 0.5, "ranges": [],
+                             "hex_override": "baseline:2026_06_17-pat03"}}),
+        encoding="utf-8")
+    mod = _load_exporter()
+    out = tmp_path / "_deck_assets"
+    res = mod.export(tmp_path, out, vendor="Elekta", log=lambda *a: None)
+    assert res["exported"] == 1
+
+    manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    entry = manifest["experiments"][0]
+    assert entry["baseline"] == "2026_06_17-pat03"
+
+    payload = json.loads((out / entry["file"]).read_text(encoding="utf-8"))
+    assert payload["hex"]["source"]["type"] == "baseline"
+    assert len(payload["hex"]["t"]) == payload["hex"]["n"]

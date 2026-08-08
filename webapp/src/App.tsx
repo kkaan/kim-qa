@@ -109,13 +109,16 @@ export default function App() {
               {entry.id}
             </h1>
             <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>
-              {entry.hex_file ? `hex: ${entry.hex_file}` : 'flat-zero ground truth'}
-              {entry.centroid_file ? ` · centroid: ${entry.centroid_file}` : ''}
+              {entry.baseline ? `baseline: ${entry.baseline}`
+                : entry.hex_file ? `hex: ${entry.hex_file}` : 'flat-zero ground truth'}
+              {entry.centroid_file ? ` · centroid: ${entry.centroid_file}`
+                : ' · no centroid — expected offset 0'}
               {entry.has_couch_shifts ? ' · couch shifts present' : ''}
             </div>
             {/* Key includes the vendor so a vendor switch remounts and refetches
                 the open session with re-signed couch corrections. */}
             <KimOverlay key={`${entry.id}:${config.vendor}`} entry={entry} traces={manifest.traces}
+              baselines={manifest.baselines ?? []}
               onToast={setToast} onStateSaved={reload}
               initialView={viewStates.current[entry.id]} onViewChange={rememberView} />
           </>

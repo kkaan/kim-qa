@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Plotly from '../plotly';
 import { Plot } from '../plotly';
 import {
-  computeResiduals, flatZeroHex, interp, metricsTable, token,
+  computeResiduals, flatZeroHex, hexCurveFromPayload, interp, metricsTable, token,
   type Axes, type HexCurve, type Range,
 } from '../lib';
 import {
@@ -98,6 +98,7 @@ export type ViewState = {
 type Props = {
   entry: ManifestEntry;
   traces: string[];
+  baselines: string[];
   onToast: (m: string) => void;
   onStateSaved: () => void;
   initialView?: ViewState;
@@ -105,7 +106,7 @@ type Props = {
 };
 
 export default function KimOverlay({
-  entry, traces, onToast, onStateSaved, initialView, onViewChange,
+  entry, traces, baselines, onToast, onStateSaved, initialView, onViewChange,
 }: Props) {
   const experiment = entry.id;
   const framesBase = framesBaseFor(experiment);
@@ -135,6 +136,8 @@ export default function KimOverlay({
   const [yRange, setYRange] = useState<number | null>(
     entry.y_range ?? DEFAULT_Y_RANGE);
   const [hexOverride, setHexOverride] = useState<string | null>(entry.hex_override);
+  const [testLog, setTestLog] = useState<string | null>(entry.test_log_override ?? null);
+  const [gantryRemap, setGantryRemap] = useState<boolean>(entry.gantry_remap ?? false);
   const [frames, setFrames] = useState<FrameEntry[] | null>(null);
   const [cropSize, setCropSize] = useState(256);
   const [hoverFrame, setHoverFrame] = useState<FrameEntry | null>(null);
@@ -222,16 +225,19 @@ export default function KimOverlay({
     [],
   );
 
-  // Ground truth: real hex for motion, synthetic flat-zero for static.
+  // Ground truth: hexamotion trace or baseline KIM log for motion (the
+  // payload's hex block carries either fixed dt or an explicit irregular t),
+  // synthetic flat-zero for static.
   const hex: HexCurve | null = useMemo(() => {
     if (!payload) return null;
     if (payload.kind === 'motion' && payload.hex) {
-      const { dt, n, lr, si, ap } = payload.hex;
-      const t = Array.from({ length: n }, (_, i) => i * dt);
-      return { t, lr, si, ap };
+      return hexCurveFromPayload(payload.hex);
     }
     return flatZeroHex(payload.kim);
   }, [payload]);
+  const gtSource = payload?.hex?.source;
+  const gtIsBaseline = gtSource?.type === 'baseline';
+  const gtLegend = gtIsBaseline ? `Baseline (${gtSource!.name})` : 'Hex (input)';
 
   // Which trace the metrics card describes: the last-toggled-on offline overlay,
   // else the primary online run.
@@ -409,7 +415,7 @@ export default function KimOverlay({
       } else {
         data.push({
           ...ax, x: hexX, y: hexY[key], type: 'scatter', mode: 'lines',
-          name: 'Hex (input)', legendgroup: 'hex', showlegend: first,
+          name: gtLegend, legendgroup: 'hex', showlegend: first,
           line: { color: colors.cyan, width: 1.4 }, hoverinfo: 'skip',
         });
         data.push({
@@ -697,6 +703,7 @@ export default function KimOverlay({
   const stateBody = (): StateBody => ({
     offset, ranges, y_range: yRange, hex_override: hexOverride,
     offset_origin: 'manual', x_range: xRange, offline_offsets: offlineOffsets,
+    test_log: testLog, gantry_remap: gantryRemap,
   });
 
   const saveAll = async () => {
@@ -717,28 +724,60 @@ export default function KimOverlay({
     }
   };
 
+  const refreshFromServer = async (toast: string) => {
+    const data = await fetchPayload(experiment);
+    setPayload(data);
+    setOffset(data.saved_offset ?? 0);
+    setRanges((data.saved_ranges ?? []).map((r) => [r[0], r[1]] as Range));
+    setXRange(data.saved_x_range ?? null);
+    const seed: Record<string, number> = {};
+    for (const ov of data.kim_offline ?? []) {
+      if (ov.offset != null) seed[ov.folder] = ov.offset;
+    }
+    setOfflineOffsets(seed);
+    setShowGhost((data.shift_events?.length ?? 0) > 0);
+    onToast(toast.replace('{origin}', data.offset_origin ?? 'reloaded'));
+    onStateSaved();
+  };
+
+  const changeTestLog = async (v: string) => {
+    const next = v === '' ? null : v;
+    setTestLog(next);
+    try {
+      await postState(experiment, { ...stateBody(), test_log: next });
+      // Server dropped the stale offset (fit to the old trace); refetch.
+      await refreshFromServer(next
+        ? `Test trace: ${next} — {origin}.` : 'Test trace: auto — reloaded.');
+    } catch (e) {
+      onToast(String(e));
+    }
+  };
+
+  const toggleGantryRemap = async () => {
+    const next = !gantryRemap;
+    setGantryRemap(next);
+    try {
+      await postState(experiment, { ...stateBody(), gantry_remap: next });
+      // The server dropped the stale offset; the remapped (or raw) baseline
+      // timebase arrives with the fresh payload.
+      await refreshFromServer(next
+        ? 'Baseline remapped onto the test timebase via gantry — {origin}.'
+        : 'Gantry remap off — baseline back on its own timebase.');
+    } catch (e) {
+      onToast(String(e));
+    }
+  };
+
   const changeHexOverride = async (v: string) => {
     const next = v === '' ? null : v;
     setHexOverride(next);
     try {
       await postState(experiment, { ...stateBody(), hex_override: next });
-      // The server dropped the stale offset and re-fit RMSE on SI against the
-      // new trace; pull the fresh payload so the overlay and offset update.
-      const data = await fetchPayload(experiment);
-      setPayload(data);
-      setOffset(data.saved_offset ?? 0);
-      setRanges((data.saved_ranges ?? []).map((r) => [r[0], r[1]] as Range));
-      setXRange(data.saved_x_range ?? null);
-      const seed: Record<string, number> = {};
-      for (const ov of data.kim_offline ?? []) {
-        if (ov.offset != null) seed[ov.folder] = ov.offset;
-      }
-      setOfflineOffsets(seed);
-      setShowGhost((data.shift_events?.length ?? 0) > 0);
-      onToast(next
-        ? `Hex trace override: ${next} — ${data.offset_origin ?? 'reloaded'}.`
-        : 'Hex override cleared — reloaded.');
-      onStateSaved();
+      // The server dropped the stale offset and re-fit against the new
+      // ground truth; pull the fresh payload so the overlay and offset update.
+      await refreshFromServer(next
+        ? `Ground truth override: ${next} — {origin}.`
+        : 'Ground-truth override cleared — reloaded.');
     } catch (e) {
       onToast(String(e));
     }
@@ -796,7 +835,7 @@ export default function KimOverlay({
           {tip && <PointTip tip={tip} colors={colors} />}
         </div>
         <div style={{ width: 340, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <MetricsPanel rows={metrics.rows} n={metrics.n} totalDt={metrics.totalDt} source={metrics.source} mono={colors.mono} color={metrics.color} />
+          <MetricsPanel rows={metrics.rows} n={metrics.n} totalDt={metrics.totalDt} source={metrics.source} mono={colors.mono} color={metrics.color} heading={gtIsBaseline ? `Tracking error. KIM vs baseline ${gtSource!.name}` : 'Tracking error. KIM vs HexaMotion'} />
           {(entry.has_frames || frames) && (
             <FramePanel
               base={framesBase}
@@ -891,14 +930,49 @@ export default function KimOverlay({
             style={{ width: 64, fontFamily: 'var(--font-mono)', fontSize: 13, padding: '4px 6px', border: '1px solid var(--line)' }}
           /> mm
         </label>
+        {(entry.test_logs?.length ?? 0) > 1 && (
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--muted)', fontSize: 13 }}>
+            test trace
+            <select value={testLog ?? ''} onChange={(e) => changeTestLog(e.target.value)}
+              style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }}>
+              <option value="">auto ({entry.test_log === '.' ? 'session folder' : entry.test_log})</option>
+              {entry.test_logs.map((d) => (
+                <option key={d} value={d}>{d === '.' ? '(session folder)' : d}</option>
+              ))}
+            </select>
+          </label>
+        )}
         <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--muted)', fontSize: 13 }}>
-          hex trace
+          ground truth
           <select value={hexOverride ?? ''} onChange={(e) => changeHexOverride(e.target.value)}
             style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }}>
             <option value="">auto{entry.hex_file ? ` (${entry.hex_file})` : ' (none)'}</option>
-            {traces.map((t) => <option key={t} value={t}>{t}</option>)}
+            {traces.length > 0 && (
+              <optgroup label="hexamotion traces">
+                {traces.map((t) => <option key={t} value={t}>{t}</option>)}
+              </optgroup>
+            )}
+            {baselines.length > 0 && (
+              <optgroup label="baseline KIM logs">
+                {baselines.map((b) => (
+                  <option key={b} value={`baseline:${b}`}>{b}</option>
+                ))}
+              </optgroup>
+            )}
           </select>
         </label>
+        {gtIsBaseline && payload.hex?.gantry && payload.kim.gantry && (
+          <button type="button" onClick={toggleGantryRemap}
+            title="Place the baseline on the test run's timebase via the shared gantry angle (same-fraction replays have processing-speed-warped time columns)"
+            style={{
+              ...btnStyle,
+              background: gantryRemap ? 'var(--cyan)' : 'transparent',
+              color: gantryRemap ? '#fff' : 'var(--muted)',
+              border: '1px solid var(--line)',
+            }}>
+            {gantryRemap ? 'gantry remap: on' : 'gantry remap: off'}
+          </button>
+        )}
         <button type="button" onClick={saveAll} disabled={saving}
           style={{ ...btnStyle, background: 'var(--orange)', color: '#fff', opacity: saving ? 0.6 : 1 }}>
           {saving ? 'Saving...' : 'Save'}
@@ -1118,6 +1192,7 @@ function MetricsPanel({
   source,
   mono,
   color,
+  heading,
 }: {
   rows: { name: string; mean: number; std: number; p5: number; p95: number }[];
   n: number;
@@ -1125,6 +1200,7 @@ function MetricsPanel({
   source: string;
   mono: string;
   color: string;   // accent (left border + 3D label) = active trace's colour
+  heading: string;
 }) {
   return (
     <div
@@ -1140,7 +1216,7 @@ function MetricsPanel({
       }}
     >
       <div style={{ color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 12, marginBottom: 6 }}>
-        Tracking error. KIM vs HexaMotion
+        {heading}
       </div>
       <div style={{ fontSize: 12, color: 'var(--ink-2)', marginBottom: 14, wordBreak: 'break-all', lineHeight: 1.3 }}>
         <span style={{ color: 'var(--muted)' }}>Source </span>

@@ -24,6 +24,9 @@ def parse_args(argv=None):
                         "Omit to pick via folder dialog.")
     p.add_argument("--traces-root", default=None,
                    help="Hexamotion traces root (default: <root>/Motion traces)")
+    p.add_argument("--baselines-root", default=None,
+                   help="Baseline KIM-log folders root "
+                        "(default: <root>/Baselines)")
     p.add_argument("--vendor", choices=["Elekta", "Varian"], default=None,
                    help="Machine vendor (default: last one saved for this "
                         "root, else Elekta)")
@@ -58,7 +61,7 @@ def main(argv=None) -> int:
     # Vendor resolution: explicit flag > persisted per-root choice > Elekta.
     vendor = args.vendor or load_vendor(root) or "Elekta"
     config = ServerConfig(root=root, traces_root=args.traces_root,
-                          vendor=vendor)
+                          baselines_root=args.baselines_root, vendor=vendor)
     app = create_app(config)
     port = args.port or _free_port()
     url = f"http://127.0.0.1:{port}/"

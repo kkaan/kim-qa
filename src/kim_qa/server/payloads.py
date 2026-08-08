@@ -10,10 +10,12 @@ import numpy as np
 
 from kim_qa.io.centroid import parse_centroid_file
 from kim_qa.io.couch import parse_couch_shifts
+from kim_qa.gantry import remap_gantry_to_time
+from kim_qa.io.ground_truth import parse_ground_truth_file
 from kim_qa.interrupt import apply_couch_shifts
 from kim_qa.io.marker_locations import read_kim_segments, read_gantry_segments
 from .autofit import find_axis_offset
-from .discovery import Session, align_axis_for
+from .discovery import Session
 
 ROUND_DP = 4
 CONFIDENCE_FLOOR = 0.4
@@ -24,22 +26,61 @@ def _r4(arr) -> list:
 
 
 def read_hex(path: Path) -> dict:
-    arr = np.genfromtxt(path, delimiter="\t", skip_header=1)
-    return {
-        "dt": 0.02,
-        "n": int(len(arr)),
-        "lr": _r4(arr[:, 0]),
-        "si": _r4(arr[:, 1]),
-        "ap": _r4(arr[:, 2]),
-    }
+    """Ground-truth trace via format auto-detection (3-col hexamotion,
+    whitespace robot with explicit time, comma-delimited robot). A 3-col
+    trace keeps the compact fixed-dt block; files with a real time column
+    carry it as an explicit `t` array."""
+    df = parse_ground_truth_file(path)
+    if df.empty:
+        raise ValueError(f"unreadable ground-truth trace: {path.name}")
+    t = np.asarray(df["time"], float)
+    out = {"n": int(len(df)), "lr": _r4(df["x"]), "si": _r4(df["y"]),
+           "ap": _r4(df["z"])}
+    steps = np.diff(t)
+    if len(t) > 1 and t[0] == 0.0 and np.allclose(steps, steps[0]):
+        out["dt"] = round(float(steps[0]), 6)     # reconstructed timebase
+    else:
+        out["t"] = _r4(t)                         # real time column
+    return out
+
+
+def read_baseline_gt(baseline_dir: Path, centroid: dict, vendor: str) -> dict:
+    """Ground truth from a baseline KIM-log folder: stitched segments on their
+    own irregular timebase, the session's expected centroid subtracted (shared
+    between test and baseline, so it cancels in residuals) and the baseline's
+    OWN couch shifts removed when it has a couchShifts.txt."""
+    segs = read_kim_segments(baseline_dir)
+    lr = segs["lr"] - centroid["lr"]
+    si = segs["si"] - centroid["si"]
+    ap = segs["ap"] - centroid["ap"]
+    couch = baseline_dir / "couchShifts.txt"
+    if couch.exists():
+        shifts = parse_couch_shifts(couch, vendor=vendor)
+        lr, si, ap = apply_couch_shifts(lr, si, ap, segs["file_index"], shifts)
+    out = {"t": _r4(segs["t"]), "n": int(len(segs["t"])),
+           "lr": _r4(lr), "si": _r4(si), "ap": _r4(ap),
+           "source": {"type": "baseline", "name": baseline_dir.name}}
+    gantry = read_gantry_segments(baseline_dir, expected_len=len(segs["t"]))
+    if gantry is not None:
+        out["gantry"] = _r4(gantry)
+    return out
+
+
+def hex_time_axis(hex_data: dict) -> np.ndarray:
+    """Ground-truth time axis: explicit irregular `t` (baseline KIM) or the
+    fixed-step reconstruction `arange(n) * dt` (hexamotion trace)."""
+    if "t" in hex_data:
+        return np.asarray(hex_data["t"], float)
+    return np.arange(hex_data["n"]) * hex_data["dt"]
 
 
 def expected_centroid(session: Session) -> dict:
     """Per-axis expected marker-centroid offset from iso (mm, keys lr/si/ap)
-    plus the source filename. Every session requires a centroid file; a
-    phantom with the marker at isocentre uses an all-zero file."""
+    plus the source filename. Without a centroid file the expected offset is
+    zero — correct for test-vs-baseline comparisons where the shared centroid
+    cancels in the residuals."""
     if session.centroid_file is None:
-        raise FileNotFoundError(f"{session.id}: no centroid file")
+        return {"file": None, "lr": 0.0, "si": 0.0, "ap": 0.0}
     exp = parse_centroid_file(session.centroid_file)["expected_centroid"]
     # parse_centroid_file axes map x->LR, y->SI, z->AP (see kim_qa.metrics).
     # "+ 0.0" normalises IEEE -0.0 so displays never show "-0.00".
@@ -130,6 +171,13 @@ def build_manifest_entries(sessions, state: dict) -> list[dict]:
             "id": sess.id,
             "kind": sess.kind,
             "hex_file": sess.hex_file.name if sess.hex_file else None,
+            "baseline": sess.baseline_dir.name if sess.baseline_dir else None,
+            "test_log": ("." if sess.kim_file.parent == sess.folder
+                         else sess.kim_file.parent.name),
+            "test_logs": ["." if d == sess.folder else d.name
+                          for d in sess.log_dirs],
+            "test_log_override": entry.get("test_log"),
+            "gantry_remap": bool(entry.get("gantry_remap")),
             "centroid_file": (sess.centroid_file.name
                               if sess.centroid_file else None),
             "has_frames": sess.has_frames,
@@ -168,10 +216,18 @@ def _resolve_offset(session: Session, arrays: dict, hex_data: dict | None,
                 str(state_entry.get("offset_origin", "saved")))
     if session.kind != "motion" or hex_data is None:
         return 0.0, "static"
-    axis = align_axis_for(session.id)
-    kim_axis = arrays[axis.lower()]
-    hex_t = np.arange(hex_data["n"]) * hex_data["dt"]
-    hex_axis = np.asarray(hex_data[axis.lower()])
+    if hex_data.get("remapped"):
+        # Gantry remap put both runs on the same timebase; an RMSE fit on top
+        # would only chase noise.
+        return 0.0, "gantry remap"
+    # Fit on the ground truth's most active axis — data-driven, since session
+    # names don't reliably encode the motion direction.
+    axis = max(("lr", "si", "ap"),
+               key=lambda a: float(np.std(np.asarray(hex_data[a], float))))
+    kim_axis = arrays[axis]
+    hex_t = hex_time_axis(hex_data)
+    hex_axis = np.asarray(hex_data[axis])
+    axis = axis.upper()
     off, diag = find_axis_offset(arrays["t"], kim_axis, hex_t, hex_axis)
     if diag["confidence"] < CONFIDENCE_FLOOR:
         return off, f"low confidence, align manually (RMSE on {axis})"
@@ -181,8 +237,18 @@ def _resolve_offset(session: Session, arrays: dict, hex_data: dict | None,
 def build_overlay_payload(session: Session, vendor: str,
                           state_entry: dict | None) -> dict:
     arrays = load_session_arrays(session, vendor)
-    hex_data = read_hex(session.hex_file) if (
-        session.kind == "motion" and session.hex_file) else None
+    if session.kind == "motion" and session.baseline_dir is not None:
+        hex_data = read_baseline_gt(session.baseline_dir, arrays["centroid"],
+                                    vendor)
+        if ((state_entry or {}).get("gantry_remap")
+                and "gantry" in hex_data and arrays["gantry"] is not None):
+            hex_data["t"] = _r4(remap_gantry_to_time(
+                arrays["gantry"], arrays["t"], hex_data["gantry"]))
+            hex_data["remapped"] = True
+    elif session.kind == "motion" and session.hex_file:
+        hex_data = read_hex(session.hex_file)
+    else:
+        hex_data = None
     offset, origin = _resolve_offset(session, arrays, hex_data, state_entry)
     ranges = [[float(lo), float(hi)]
               for lo, hi in (state_entry or {}).get("ranges", [])]
