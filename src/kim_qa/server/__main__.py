@@ -10,7 +10,7 @@ from kim_qa.version import __version__
 
 from .app import create_app
 from .config import ServerConfig
-from .state import load_vendor
+from .state import load_centroid_file, load_vendor
 
 
 def parse_args(argv=None):
@@ -30,6 +30,10 @@ def parse_args(argv=None):
     p.add_argument("--vendor", choices=["Elekta", "Varian"], default=None,
                    help="Machine vendor (default: last one saved for this "
                         "root, else Elekta)")
+    p.add_argument("--centroid", default=None,
+                   help="Centroid filename under the results root, used for "
+                        "every session (default: last one saved for this "
+                        "root, else auto-detect)")
     p.add_argument("--port", type=int, default=0,
                    help="Port (default: pick a free one)")
     p.add_argument("--no-browser", action="store_true")
@@ -60,8 +64,11 @@ def main(argv=None) -> int:
         return 1
     # Vendor resolution: explicit flag > persisted per-root choice > Elekta.
     vendor = args.vendor or load_vendor(root) or "Elekta"
+    # Same precedence for the centroid pick; absent everywhere = auto-detect.
+    centroid = args.centroid or load_centroid_file(root)
     config = ServerConfig(root=root, traces_root=args.traces_root,
-                          baselines_root=args.baselines_root, vendor=vendor)
+                          baselines_root=args.baselines_root, vendor=vendor,
+                          centroid_file=centroid)
     app = create_app(config)
     port = args.port or _free_port()
     url = f"http://127.0.0.1:{port}/"

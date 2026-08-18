@@ -9,15 +9,29 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from kim_qa.io.centroid import parse_centroid_file
+
+from . import browse
 from .config import ServerConfig
-from .discovery import discover_sessions, list_baselines, list_traces
+from .discovery import (
+    discover_sessions, list_baselines, list_centroid_files, list_traces,
+    resolve_centroid_override,
+)
 from .frames import build_frame_index, render_frame_png
 from .payloads import build_manifest_entries, build_overlay_payload
-from .state import load_state, regenerate_summary, save_vendor, update_entry
+from .state import (
+    load_state, regenerate_summary, save_centroid_file, save_vendor,
+    update_entry,
+)
 
 
 class ConfigUpdate(BaseModel):
-    vendor: Literal["Elekta", "Varian"]
+    """Partial update of the per-root settings — an absent field is left
+    alone, so posting only {"vendor": ...} (as older clients do) never
+    clears the centroid pick."""
+    vendor: Optional[Literal["Elekta", "Varian"]] = None
+    # Filename directly under the results root; "" selects auto-detection.
+    centroid_file: Optional[str] = None
 
 
 class StateBody(BaseModel):
@@ -97,14 +111,47 @@ def create_app(config: ServerConfig) -> FastAPI:
         return {"root": str(config.root),
                 "traces_root": str(config.traces_root),
                 "baselines_root": str(config.baselines_root),
-                "vendor": config.vendor}
+                "vendor": config.vendor,
+                "centroid_file": config.centroid_file,
+                "centroid_files": list_centroid_files(config.root)}
 
     @app.post("/api/config")
     def post_config(update: ConfigUpdate):
-        config.vendor = update.vendor
-        save_vendor(config.root, update.vendor)
+        if update.centroid_file:
+            # Validate a manual pick up front: a typo'd path or a file that is
+            # not a centroid file must fail loudly here, because discovery's
+            # own handling of an unresolvable pick is a silent fallback to
+            # auto-detection (right for later breakage, wrong as feedback).
+            resolved = resolve_centroid_override(config.root,
+                                                 update.centroid_file)
+            if resolved is None:
+                raise HTTPException(
+                    422, f"no such file: {update.centroid_file}")
+            try:
+                parse_centroid_file(resolved)
+            except (ValueError, OSError) as e:
+                raise HTTPException(
+                    422, f"{resolved.name}: {e}") from e
+        if update.vendor is not None:
+            config.vendor = update.vendor
+            save_vendor(config.root, update.vendor)
+        if update.centroid_file is not None:
+            config.centroid_file = update.centroid_file or None
+            save_centroid_file(config.root, config.centroid_file)
         app.state.cache.clear()
         return get_config()
+
+    @app.post("/api/browse/centroid")
+    def browse_centroid():
+        """Open a native file dialog on the machine running the server (always
+        the user's own, since it binds 127.0.0.1). Returns the chosen path
+        without saving it — the client posts it back to /api/config, so a
+        cancel or a bad pick changes nothing."""
+        try:
+            path = browse.ask_centroid_file(initialdir=str(config.root))
+        except RuntimeError as e:
+            raise HTTPException(503, str(e)) from e
+        return {"path": path}
 
     @app.get("/api/manifest")
     def manifest():

@@ -11,6 +11,9 @@ class ServerConfig:
     traces_root: Path | None = None
     vendor: str = "Elekta"
     baselines_root: Path | None = None
+    # Manual centroid pick, a filename directly under `root`, applied to every
+    # session. None = auto-detect (session folder preferred over the root).
+    centroid_file: str | None = None
 
     def __post_init__(self):
         self.root = Path(self.root)

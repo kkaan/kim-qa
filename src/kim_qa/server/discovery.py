@@ -119,6 +119,38 @@ def find_centroid_file(*folders: Optional[Path]) -> Optional[Path]:
     return None
 
 
+def list_centroid_files(root: Path) -> list[str]:
+    """Every *.txt directly under the results root, by name — the candidates
+    offered for a manual pick. Naming conventions are not enforced (as with
+    list_traces): roots hold centroid files under assorted names, and the
+    auto-detect 'centroid'-substring rule is exactly what a manual pick is
+    there to escape."""
+    root = Path(root)
+    if not root.is_dir():
+        return []
+    return sorted(p.name for p in root.iterdir()
+                  if p.is_file() and p.suffix.lower() == ".txt")
+
+
+def resolve_centroid_override(root: Path, name: Optional[str]) -> Optional[Path]:
+    """The manually chosen centroid file, or None to fall back to auto-detect.
+
+    `name` is either a bare filename / relative path (resolved against the
+    results root) or an absolute path anywhere on disk — centroid files are
+    often kept in a shared folder beside the results root rather than inside
+    it. A pick that no longer resolves (file moved, share offline) falls back
+    to auto-detection rather than blanking the expected offset, matching how a
+    stale hex_override is handled; POST /api/config rejects a bad path up
+    front so the fallback only ever covers later breakage.
+    """
+    if not name:
+        return None
+    path = Path(name)
+    if not path.is_absolute():
+        path = Path(root) / path
+    return path if path.is_file() else None
+
+
 def find_trace(traces_root: Path, filename: str) -> Optional[Path]:
     if not traces_root.exists():
         return None
@@ -191,6 +223,8 @@ def discover_sessions(config: ServerConfig,
     out: list[Session] = []
     if not config.root.exists():
         return out
+    # Per-root manual pick, applied to every session; None keeps auto-detect.
+    centroid_pick = resolve_centroid_override(config.root, config.centroid_file)
     for folder in sorted(config.root.iterdir()):
         if not folder.is_dir() or folder.name.startswith(("_", ".")):
             continue
@@ -211,8 +245,8 @@ def discover_sessions(config: ServerConfig,
             hex_file=hex_path,
             has_frames=(kim_file.parent / "KIM-KV").is_dir(),
             has_couch_shifts=(kim_file.parent / "couchShifts.txt").exists(),
-            centroid_file=find_centroid_file(kim_file.parent, folder,
-                                             config.root),
+            centroid_file=centroid_pick or find_centroid_file(
+                kim_file.parent, folder, config.root),
             offline_dirs=find_offline_dirs(folder, kim_file.parent),
             baseline_dir=baseline_dir,
             log_dirs=log_dirs,

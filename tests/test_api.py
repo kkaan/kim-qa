@@ -41,6 +41,121 @@ def test_post_config_vendor(tmp_path):
     assert load_state(tmp_path)["_config"]["vendor"] == "Varian"
 
 
+def test_post_config_centroid_file(tmp_path):
+    """The manual centroid pick round-trips and applies to the session."""
+    sess = make_interrupt_session(tmp_path)
+    write_centroid_file(tmp_path / "Shared_Centroid.txt",
+                        seeds=((1.0, 2.0, 3.0),), iso=(0.0, 0.0, 0.0))
+    client = make_client(tmp_path)
+    # Auto-detect prefers the session's own file.
+    auto = client.get("/api/manifest").json()["experiments"][0]
+    assert auto["centroid_file"] == "Phantom_Centroid.txt", auto
+
+    r = client.post("/api/config", json={"centroid_file": "Shared_Centroid.txt"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["centroid_file"] == "Shared_Centroid.txt"
+    assert "Shared_Centroid.txt" in body["centroid_files"]
+    assert body["vendor"] == "Elekta", "a centroid-only post must not touch vendor"
+    assert load_state(tmp_path)["_config"]["centroid_file"] == "Shared_Centroid.txt"
+
+    picked = client.get("/api/manifest").json()["experiments"][0]
+    assert picked["centroid_file"] == "Shared_Centroid.txt", picked
+    # The chosen offset actually reaches the payload.
+    cent = client.get(f"/api/experiments/{quote(sess.name)}/payload").json()["centroid"]
+    assert cent["file"] == "Shared_Centroid.txt", cent
+    assert cent["lr"] == 10.0, cent      # X=1.0 cm from iso
+
+    # "" restores auto-detection without disturbing the vendor.
+    client.post("/api/config", json={"vendor": "Varian"})
+    assert client.get("/api/config").json()["centroid_file"] == "Shared_Centroid.txt"
+    r = client.post("/api/config", json={"centroid_file": ""})
+    assert r.json()["centroid_file"] is None
+    assert r.json()["vendor"] == "Varian"
+    back = client.get("/api/manifest").json()["experiments"][0]
+    assert back["centroid_file"] == "Phantom_Centroid.txt", back
+
+
+def test_post_config_centroid_absolute_path(tmp_path):
+    """A full path anywhere on disk is accepted, not just a name under root."""
+    root = tmp_path / "results"
+    root.mkdir()
+    make_interrupt_session(root)
+    far = tmp_path / "elsewhere"
+    far.mkdir()
+    write_centroid_file(far / "Shared.txt", seeds=((1.0, 2.0, 3.0),),
+                        iso=(0.0, 0.0, 0.0))
+    client = TestClient(create_app(ServerConfig(root=root)))
+
+    r = client.post("/api/config", json={"centroid_file": str(far / "Shared.txt")})
+    assert r.status_code == 200, r.text
+    assert r.json()["centroid_file"] == str(far / "Shared.txt")
+    entry = client.get("/api/manifest").json()["experiments"][0]
+    assert entry["centroid_file"] == "Shared.txt", entry
+    assert entry["error"] is None, entry
+
+
+def test_post_config_centroid_rejects_bad_path(tmp_path):
+    """A typo'd path fails loudly instead of silently reverting to auto."""
+    make_interrupt_session(tmp_path)
+    client = make_client(tmp_path)
+    r = client.post("/api/config",
+                    json={"centroid_file": str(tmp_path / "no_such_file.txt")})
+    assert r.status_code == 422, r.text
+    assert "no_such_file.txt" in r.text
+    # Rejected outright: nothing persisted, auto-detect still in force.
+    assert client.get("/api/config").json()["centroid_file"] is None
+
+
+def test_post_config_centroid_rejects_unparseable_file(tmp_path):
+    """The file must actually parse — this is the error the picker exists to fix."""
+    make_interrupt_session(tmp_path)
+    bad = tmp_path / "not_a_centroid.txt"
+    bad.write_text("Frame No, Time (sec)\n1, 0.0\n", encoding="utf-8")
+    client = make_client(tmp_path)
+    r = client.post("/api/config", json={"centroid_file": "not_a_centroid.txt"})
+    assert r.status_code == 422, r.text
+    assert "seed" in r.text.lower() or "isocenter" in r.text.lower(), r.text
+    assert client.get("/api/config").json()["centroid_file"] is None
+
+
+def test_browse_centroid_returns_chosen_path(tmp_path, monkeypatch):
+    """The Browse button surfaces the native dialog's pick; it does not save."""
+    from kim_qa.server import browse
+    chosen = tmp_path / "Picked.txt"
+    write_centroid_file(chosen)
+    monkeypatch.setattr(browse, "ask_centroid_file", lambda initialdir: str(chosen))
+    client = make_client(tmp_path)
+    r = client.post("/api/browse/centroid")
+    assert r.status_code == 200, r.text
+    assert r.json()["path"] == str(chosen)
+    # Browsing alone changes nothing — the client posts the path to /api/config.
+    assert client.get("/api/config").json()["centroid_file"] is None
+
+
+def test_browse_centroid_cancelled(tmp_path, monkeypatch):
+    """Cancelling the dialog is not an error."""
+    from kim_qa.server import browse
+    monkeypatch.setattr(browse, "ask_centroid_file", lambda initialdir: None)
+    client = make_client(tmp_path)
+    r = client.post("/api/browse/centroid")
+    assert r.status_code == 200, r.text
+    assert r.json()["path"] is None
+
+
+def test_browse_centroid_unavailable(tmp_path, monkeypatch):
+    """No display / no tkinter reports cleanly instead of a 500."""
+    from kim_qa.server import browse
+
+    def boom(initialdir):
+        raise RuntimeError("no display")
+
+    monkeypatch.setattr(browse, "ask_centroid_file", boom)
+    client = make_client(tmp_path)
+    r = client.post("/api/browse/centroid")
+    assert r.status_code == 503, r.text
+
+
 def test_manifest_lists_baselines(tmp_path):
     from tests.fixtures import make_baseline_pair
     make_baseline_pair(tmp_path)

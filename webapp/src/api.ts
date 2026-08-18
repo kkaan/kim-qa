@@ -60,6 +60,10 @@ export type AppConfig = {
   traces_root: string;
   baselines_root: string;
   vendor: 'Elekta' | 'Varian';
+  // Manual pick; null = auto-detect. Either a name/relative path under the
+  // results root or an absolute path anywhere on disk.
+  centroid_file: string | null;
+  centroid_files: string[];       // *.txt directly under the results root
 };
 
 export type StateBody = {
@@ -96,6 +100,14 @@ export const fetchManifest = () => get<AppManifest>('/api/manifest');
 export const fetchConfig = () => get<AppConfig>('/api/config');
 export const postVendor = (vendor: 'Elekta' | 'Varian') =>
   post<AppConfig>('/api/config', { vendor });
+// "" selects auto-detection. Omitting `vendor` leaves it untouched. Rejects a
+// path that does not exist or does not parse, so the caller must surface errors.
+export const postCentroidFile = (centroid_file: string) =>
+  post<AppConfig>('/api/config', { centroid_file });
+// Opens a native file dialog on the machine running the server and returns the
+// chosen path (null if cancelled). Saves nothing — post the path to apply it.
+export const browseCentroidFile = () =>
+  post<{ path: string | null }>('/api/browse/centroid', {});
 export const fetchPayload = (id: string) =>
   get<ServerPayload>(`/api/experiments/${eid(id)}/payload`);
 export const postState = (id: string, body: StateBody) =>

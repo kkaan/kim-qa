@@ -9,9 +9,10 @@ for the default view. "offline_offsets" maps each offline overlay's source
 folder name to its own time offset in seconds (independent of the primary run's
 offset). Unknown keys written by other tools are preserved on update.
 
-A reserved top-level "_config" entry holds per-root settings, currently
-{"vendor": "Elekta" | "Varian"}. Session ids are folder names and discovery
-skips "_"-prefixed folders, so the key can never collide with a session.
+A reserved top-level "_config" entry holds per-root settings:
+{"vendor": "Elekta" | "Varian", "centroid_file": str | None}. Session ids are
+folder names and discovery skips "_"-prefixed folders, so the key can never
+collide with a session.
 """
 import json
 from pathlib import Path
@@ -60,6 +61,18 @@ def load_vendor(root: Path) -> str | None:
 
 def save_vendor(root: Path, vendor: str) -> None:
     update_entry(root, CONFIG_KEY, {"vendor": vendor})
+
+
+def load_centroid_file(root: Path) -> str | None:
+    """Manually chosen centroid filename for this root, or None for auto."""
+    cfg = load_state(root).get(CONFIG_KEY)
+    name = cfg.get("centroid_file") if isinstance(cfg, dict) else None
+    return name or None
+
+
+def save_centroid_file(root: Path, name: str | None) -> None:
+    """Persist the manual pick; None/"" drops back to auto-detection."""
+    update_entry(root, CONFIG_KEY, {"centroid_file": name or None})
 
 
 def _fail_mean(v: float) -> bool:

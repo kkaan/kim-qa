@@ -34,9 +34,10 @@ vendor in the UI — the flag can be omitted. `--version` prints the build's rel
 (local/source builds report `dev`).
 
 Other flags: `--traces-root` (ground-truth traces folder; default `<root>/Motion traces`),
-`--baselines-root` (baseline KIM-log folders; default `<root>/Baselines`), `--port`
-(default 0 = a random free port, printed at startup — pass `--port 8765` for the webapp
-dev proxy), `--no-browser`.
+`--baselines-root` (baseline KIM-log folders; default `<root>/Baselines`), `--centroid`
+(centroid file to use for every session; also settable in the UI and persisted per root),
+`--port` (default 0 = a random free port, printed at startup — pass `--port 8765` for the
+webapp dev proxy), `--no-browser`.
 
 Verified end-to-end against real Bluey phantom data (metrics cross-checked against the
 canonical Python implementation).
@@ -74,7 +75,12 @@ canonical Python implementation).
 - **Centroid correction** - a centroid file (1-3 seeds/markers + isocentre) sets the expected
   centroid offset from iso, subtracted before analysis; the applied file is recorded in the UI
   and `summary.md`. Without one the expected offset falls back to zero — correct for
-  test-vs-baseline comparisons, where the shared centroid cancels in the residuals.
+  test-vs-baseline comparisons, where the shared centroid cancels in the residuals. When a
+  root holds several centroid variants, the header `centroid` row overrides the automatic
+  pick for every session: choose a file from the results root, hit **Browse…** for a file
+  dialog, or type any path (including a UNC path to a shared centroid folder elsewhere).
+  A path that does not exist or does not parse is rejected with the reason, rather than
+  silently reverting to zero.
 - **QA outputs** - Save writes `overlay.png` per session, persists tuned offsets/ranges to
   `_overlay_state.json`, and regenerates a combined `summary.md` with canonical Python
   metrics, stamped with the app version that produced it.
@@ -199,11 +205,19 @@ is not picked up as an overlay; move it up to the session root to have it plotte
 
 ### Input Files
 
-- **Centroid Files**: any `*centroid*.txt` with 1–3 seed/marker lines plus the isocentre
-  (cm). Optional (session folder preferred, results root fallback); the seed-centroid
-  offset from iso is subtracted from all trajectories. Without one the expected offset is
-  zero — fine for test-vs-baseline comparisons where the shared centroid cancels. Use an
-  all-zero file for a marker at isocentre.
+- **Centroid Files**: 1–3 seed/marker lines plus the isocentre, in cm. Three layouts are
+  accepted: labelled `Seed 1`/`Seed 2`/… lines (patient files), a single `Marker_<label>`
+  line (phantom/robot files), and the label-free numeric variant made for the MATLAB QA
+  codes (one `x y z` row per seed, isocentre last). The isocentre line may be labelled
+  `Isocenter`, `Isocentre` **or** `Centroid (cm)` — KIM's own export uses the last of
+  these, for the same quantity.
+  Optional, and found automatically as any `*centroid*.txt` (session folder preferred,
+  results root fallback); the seed-centroid offset from iso is subtracted from all
+  trajectories. Without one the expected offset is zero — fine for test-vs-baseline
+  comparisons where the shared centroid cancels. Use an all-zero file for a marker at
+  isocentre. To override the automatic pick — several variants in one root, or a centroid
+  kept in a shared folder outside it — use the UI's `centroid` row or `--centroid`; the
+  choice applies to every session in the root and persists in `_overlay_state.json`.
 - **KIM Trajectory Logs**: `MarkerLocationsGA_CouchShift_*.txt` (primary: positions +
   gantry, marker columns resolved by header name) with `MarkerLocations_CouchShift_*.txt`
   as fallback — both carry identical marker rows. 1–3+ markers are averaged into a
@@ -220,7 +234,8 @@ is not picked up as an overlay; move it up to the session root to have it plotte
 
 - **`overlay.png`** (per session): the saved overlay figure
 - **`_overlay_state.json`** (root): persisted offsets, ranges, and per-session settings
-  (ground-truth/test-trace picks, gantry remap, zoom, per-overlay offsets, vendor)
+  (ground-truth/test-trace picks, gantry remap, zoom, per-overlay offsets), plus the
+  per-root vendor and centroid-file choices under the reserved `_config` key
 - **`summary.md`** (root): combined per-axis + 3D statistics for every reviewed session
   and offline overlay, out-of-tolerance values flagged red
 

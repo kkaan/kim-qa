@@ -538,7 +538,13 @@
       offset from isocentre is subtracted from every KIM trajectory before analysis. Place one
       per session, or a shared one at the results root; for a marker sitting at isocentre use an
       all-zero file. Absent = expected offset zero (fine for baseline comparisons, where the
-      shared centroid cancels). Multi-marker KIM logs are averaged into the same centroid.</div>
+      shared centroid cancels). Multi-marker KIM logs are averaged into the same centroid.
+      Labelled <code>Seed 1</code>&hellip; and <code>Marker_&lt;label&gt;</code> layouts are both
+      read, as is the label-free numeric variant used by the MATLAB QA codes; the isocentre line
+      may be titled <code>Isocenter</code>, <code>Isocentre</code> or <code>Centroid (cm)</code>
+      &mdash; KIM's own export uses the last of these. When one root holds several variants, the
+      app's <i>centroid</i> row overrides the automatic pick for every session: choose from the
+      results root, <b>Browse&hellip;</b> for a file dialog, or paste any path.</div>
     </div>
   </div>
   <div class="reg">
