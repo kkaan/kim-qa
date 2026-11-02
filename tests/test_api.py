@@ -491,3 +491,102 @@ def test_cli_version_flag(capsys):
         parse_args(["--version"])
     assert exc.value.code == 0
     assert capsys.readouterr().out.strip() == f"KIM-QA-Server {__version__}"
+
+
+# --- CBCT detected offset -------------------------------------------------
+# A setup error measured independently (e.g. by CBCT), typed in mm per axis
+# and applied at analysis time. Sign convention: the entered value is what
+# was MEASURED, so it is added to the expected centroid and thereby
+# subtracted from KIM. Root-wide, like the vendor and centroid picks.
+
+def test_post_config_cbct_offset(tmp_path):
+    """The offset round-trips through /api/config and persists under _config."""
+    client = make_client(tmp_path)
+    assert client.get("/api/config").json()["cbct_offset"] == {
+        "lr": 0.0, "si": 0.0, "ap": 0.0}
+
+    r = client.post("/api/config",
+                    json={"cbct_offset": {"lr": 0.0, "si": 0.5, "ap": -0.3}})
+    assert r.status_code == 200, r.text
+    assert r.json()["cbct_offset"] == {"lr": 0.0, "si": 0.5, "ap": -0.3}
+    assert client.get("/api/config").json()["cbct_offset"]["si"] == 0.5
+    assert load_state(tmp_path)["_config"]["cbct_offset"]["si"] == 0.5
+
+
+def test_post_config_cbct_offset_rounds_to_one_decimal(tmp_path):
+    """Stored at the typed precision, so report and input never disagree."""
+    client = make_client(tmp_path)
+    r = client.post("/api/config", json={"cbct_offset": {"lr": 0.44,
+                                                         "si": 0.55,
+                                                         "ap": 0.0}})
+    assert r.status_code == 200, r.text
+    assert r.json()["cbct_offset"]["lr"] == 0.4
+    assert r.json()["cbct_offset"]["si"] == 0.6
+
+
+def test_post_config_cbct_offset_is_a_partial_update(tmp_path):
+    """An older client posting only {"vendor"} must not clear the offset."""
+    client = make_client(tmp_path)
+    client.post("/api/config", json={"cbct_offset": {"lr": 0.0, "si": 0.5,
+                                                     "ap": 0.0}})
+    r = client.post("/api/config", json={"vendor": "Varian"})
+    assert r.status_code == 200
+    assert r.json()["cbct_offset"]["si"] == 0.5
+
+
+def test_post_config_cbct_offset_rejects_non_finite(tmp_path):
+    """A NaN would poison every metric silently; fail loudly instead.
+
+    Strict JSON has no NaN literal (a browser's JSON.stringify emits null),
+    but Python's json.loads accepts the bare tokens, so a scripted client can
+    deliver one. Posted as raw content because the test client's own
+    serialiser refuses to encode it.
+    """
+    client = make_client(tmp_path)
+    for bad in ('{"cbct_offset": {"lr": 0.0, "si": NaN, "ap": 0.0}}',
+                '{"cbct_offset": {"lr": Infinity, "si": 0.0, "ap": 0.0}}'):
+        r = client.post("/api/config", content=bad,
+                        headers={"content-type": "application/json"})
+        assert r.status_code == 422, (bad, r.status_code, r.text)
+
+
+def test_post_config_cbct_offset_rejects_unknown_axis(tmp_path):
+    """A typo'd axis key would otherwise read as a silent zero."""
+    client = make_client(tmp_path)
+    r = client.post("/api/config", json={"cbct_offset": {"lr": 0.0, "IS": 0.5}})
+    assert r.status_code == 422, r.text
+
+
+def test_cbct_offset_shifts_kim_trace(tmp_path):
+    """+0.5 SI means the marker sat 0.5 mm superior, so KIM drops by 0.5."""
+    make_motion_session(tmp_path, tmp_path / "Motion traces")
+    client = make_client(tmp_path)
+    exp_id = client.get("/api/manifest").json()["experiments"][0]["id"]
+    url = f"/api/experiments/{quote(exp_id, safe='')}/payload"
+
+    before = client.get(url).json()["kim"]
+    client.post("/api/config",
+                json={"cbct_offset": {"lr": 0.0, "si": 0.5, "ap": -0.2}})
+    after = client.get(url).json()["kim"]
+
+    assert np.allclose(np.array(after["si"]), np.array(before["si"]) - 0.5)
+    assert np.allclose(np.array(after["ap"]), np.array(before["ap"]) + 0.2)
+    assert np.allclose(np.array(after["lr"]), np.array(before["lr"]))
+
+
+def test_cbct_offset_applies_without_a_centroid_file(tmp_path):
+    """expected_centroid() short-circuits to zeros with no centroid file; the
+    manual offset must still apply on that path (the common case here)."""
+    make_motion_session(tmp_path, tmp_path / "Motion traces")
+    for f in tmp_path.rglob("*entroid*.txt"):
+        f.unlink()
+    client = make_client(tmp_path)
+    entry = client.get("/api/manifest").json()["experiments"][0]
+    assert entry["centroid_file"] is None, "fixture should have no centroid"
+    url = f"/api/experiments/{quote(entry['id'], safe='')}/payload"
+
+    before = client.get(url).json()["kim"]
+    client.post("/api/config",
+                json={"cbct_offset": {"lr": 0.0, "si": 0.5, "ap": 0.0}})
+    after = client.get(url).json()["kim"]
+    assert np.allclose(np.array(after["si"]), np.array(before["si"]) - 0.5)

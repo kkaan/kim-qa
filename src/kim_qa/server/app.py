@@ -1,5 +1,6 @@
 """FastAPI application: API routes + static frontend serving."""
 import base64
+import math
 import sys
 from pathlib import Path
 from typing import Literal, Optional
@@ -20,8 +21,8 @@ from .discovery import (
 from .frames import build_frame_index, render_frame_png
 from .payloads import build_manifest_entries, build_overlay_payload
 from .state import (
-    load_state, regenerate_summary, save_centroid_file, save_vendor,
-    update_entry,
+    AXES, ZERO_OFFSET, load_state, regenerate_summary, save_cbct_offset,
+    save_centroid_file, save_vendor, update_entry,
 )
 
 
@@ -32,6 +33,9 @@ class ConfigUpdate(BaseModel):
     vendor: Optional[Literal["Elekta", "Varian"]] = None
     # Filename directly under the results root; "" selects auto-detection.
     centroid_file: Optional[str] = None
+    # Independently measured setup error, mm per axis {lr, si, ap}. The value
+    # is what was MEASURED, so it is subtracted from KIM. All-zeros clears it.
+    cbct_offset: Optional[dict[str, float]] = None
 
 
 class StateBody(BaseModel):
@@ -113,7 +117,8 @@ def create_app(config: ServerConfig) -> FastAPI:
                 "baselines_root": str(config.baselines_root),
                 "vendor": config.vendor,
                 "centroid_file": config.centroid_file,
-                "centroid_files": list_centroid_files(config.root)}
+                "centroid_files": list_centroid_files(config.root),
+                "cbct_offset": config.cbct_offset or dict(ZERO_OFFSET)}
 
     @app.post("/api/config")
     def post_config(update: ConfigUpdate):
@@ -132,6 +137,22 @@ def create_app(config: ServerConfig) -> FastAPI:
             except (ValueError, OSError) as e:
                 raise HTTPException(
                     422, f"{resolved.name}: {e}") from e
+        if update.cbct_offset is not None:
+            # A NaN here would silently poison every metric downstream, and an
+            # unknown axis key is a typo that would otherwise read as zero.
+            bad = set(update.cbct_offset) - set(AXES)
+            if bad:
+                raise HTTPException(422, f"unknown axes: {sorted(bad)}")
+            cleaned = {}
+            for ax in AXES:
+                v = float(update.cbct_offset.get(ax, 0.0))
+                if not math.isfinite(v):
+                    raise HTTPException(422, f"{ax}: must be a finite number")
+                # Stored at the precision the user types, so the report and
+                # the input field can never disagree.
+                cleaned[ax] = round(v, 1) + 0.0
+            config.cbct_offset = cleaned
+            save_cbct_offset(config.root, cleaned)
         if update.vendor is not None:
             config.vendor = update.vendor
             save_vendor(config.root, update.vendor)
@@ -171,7 +192,7 @@ def create_app(config: ServerConfig) -> FastAPI:
         if key not in app.state.cache:
             entry = load_state(config.root).get(exp_id)
             app.state.cache[key] = build_overlay_payload(
-                sess, config.vendor, entry)
+                sess, config.vendor, entry, config.cbct_offset)
         return app.state.cache[key]
 
     @app.get("/api/experiments/{exp_id}/frames/index.json")
@@ -212,7 +233,8 @@ def create_app(config: ServerConfig) -> FastAPI:
         png_path = sess.folder / "overlay.png"
         png_path.write_bytes(base64.b64decode(body.png_base64))
         summary = regenerate_summary(
-            config.root, list(sessions_by_id().values()), config.vendor)
+            config.root, list(sessions_by_id().values()), config.vendor,
+            cbct=config.cbct_offset)
         app.state.cache.clear()
         return {"overlay_png": str(png_path), "summary": str(summary)}
 

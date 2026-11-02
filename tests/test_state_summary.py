@@ -203,3 +203,33 @@ def test_summary_red_spans_on_failing_axes(tmp_path):
     assert RED not in line_3d
     # Overview table: failing AP mean wrapped, kept next to its ± std.
     assert f'{RED}+5.00</span>±0.00' in text
+
+
+def test_summary_reports_cbct_detected_offset(tmp_path):
+    """A setup error corrected at analysis time must be visible in the report,
+    under the exact label the physicists asked for."""
+    traces = tmp_path / "Motion traces"
+    make_motion_session(tmp_path, traces)
+    cfg = ServerConfig(root=tmp_path)
+    sessions = discover_sessions(cfg)
+    update_entry(tmp_path, "lung-typical,Test_1518",
+                 {"offset": 3.0, "ranges": []})
+    cbct = {"lr": 0.0, "si": 0.5, "ap": -0.3}
+    text = regenerate_summary(tmp_path, sessions, "Elekta",
+                              cbct=cbct).read_text(encoding="utf-8")
+    assert "CBCT detected offset" in text
+    assert "SI +0.5" in text
+    assert "AP -0.3" in text
+
+
+def test_summary_omits_cbct_offset_when_zero(tmp_path):
+    """No offset configured: reports stay exactly as they were."""
+    traces = tmp_path / "Motion traces"
+    make_motion_session(tmp_path, traces)
+    cfg = ServerConfig(root=tmp_path)
+    sessions = discover_sessions(cfg)
+    update_entry(tmp_path, "lung-typical,Test_1518",
+                 {"offset": 3.0, "ranges": []})
+    text = regenerate_summary(tmp_path, sessions, "Elekta").read_text(
+        encoding="utf-8")
+    assert "CBCT detected offset" not in text

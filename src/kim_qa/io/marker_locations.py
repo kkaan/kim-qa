@@ -14,6 +14,7 @@ non-GA files: by name when the header carries Marker triples, otherwise BY
 POSITION (cols 1..4 = time, AP, LR, SI — safe despite the embedded comma
 because those columns sit left of Filename).
 """
+import io
 import re
 from pathlib import Path
 
@@ -52,11 +53,73 @@ def _has_header(path: Path) -> bool:
         return fh.readline().lstrip().startswith("Frame")
 
 
+# Once the run passes 1000 s, KIM writes the Time field with thousands
+# separators ("1,028.870") into a comma-delimited file, so the row carries an
+# extra field and EVERY column after Time shifts right by one — corrupting the
+# marker positions, not just the clock. Anchored on the row start so only the
+# second field (Time, following the integer Frame No) is ever rewritten: the
+# unanchored form would also match a coordinate like ",130.466" in a log
+# written without spaces after its commas.
+_TIME_THOUSANDS_RE = re.compile(r"^(\s*\d+,[ \t]*)(\d{1,3}(?:,\d{3})+)", re.M)
+
+
 def _read_positional(path: Path, usecols):
+    text = path.read_text(encoding="utf-8", errors="replace")
+    text = _TIME_THOUSANDS_RE.sub(
+        lambda m: m.group(1) + m.group(2).replace(",", ""), text)
     return pd.read_csv(
-        path, skipinitialspace=True, header=None,
+        io.StringIO(text), skipinitialspace=True, header=None,
         skiprows=1 if _has_header(path) else 0, usecols=usecols,
     )
+
+
+def _rebase_restarts(t: np.ndarray) -> tuple[np.ndarray, int]:
+    """Make a concatenated timebase monotonic, returning (t, n_restarts).
+
+    One CouchShift file can hold several kV acquisitions (the .his series
+    restarts at 00001); each is clocked from its own origin, so the raw Time
+    column jumps backwards and can go negative. Callers derive the run's span
+    from t[0]/t[-1], which a backwards jump collapses — silently dropping
+    samples from the metrics, or inverting the span entirely. Each restart is
+    therefore re-based to continue one median sample step after the previous
+    acquisition. Spacing WITHIN an acquisition is real and preserved exactly;
+    the gap between them is not recoverable from the log, so it is nominal.
+    """
+    t = np.asarray(t, float)
+    if t.size < 2:
+        return t, 0
+    steps = np.diff(t)
+    forward = steps[steps > 0]
+    step = float(np.median(forward)) if forward.size else 1.0
+    out = t.copy()
+    shift = 0.0
+    restarts = 0
+    for i in range(1, t.size):
+        if t[i] < t[i - 1]:
+            shift = out[i - 1] + step - t[i]
+            restarts += 1
+        out[i] = t[i] + shift
+    return out, restarts
+
+
+def _read_one_file(path: Path, markers) -> dict:
+    """One log file's time and per-axis centroid arrays. With named marker
+    columns the complete Marker_<n> triples are averaged into a centroid;
+    without them the positional layout (cols 1..4 = time, AP, LR, SI) is
+    read as a single marker."""
+    if markers is None:
+        df = _read_positional(path, usecols=[1, 2, 3, 4])
+        df.columns = ["t", "ap", "lr", "si"]
+        return {k: df[k].to_numpy(float) for k in ("t", "ap", "lr", "si")}
+    axis_cols = {axis: [m[axis] for m in markers.values()]
+                 for axis in ("AP", "LR", "SI")}
+    usecols = sorted({1, *(c for cs in axis_cols.values() for c in cs)})
+    df = _read_positional(path, usecols=usecols)
+    out = {"t": df[1].to_numpy(float)}
+    for axis in ("AP", "LR", "SI"):
+        out[axis.lower()] = np.mean(
+            [df[c].to_numpy(float) for c in axis_cols[axis]], axis=0)
+    return out
 
 
 def _numbered_files(folder: Path, pattern: re.Pattern) -> list[Path]:
@@ -79,8 +142,16 @@ def read_kim_segments(folder: Path) -> dict:
     reduction the MATLAB scripts applied; the column indices are reused for
     headerless continuation files.
 
-    Returns dict of numpy arrays: t, lr, si, ap (raw, uncorrected, real
-    timebase), int array file_index, and int n_markers.
+    Two PRIME patient-export quirks are repaired on the way in, both of which
+    corrupt data silently rather than raising: the thousands separator KIM
+    writes into the Time field past 1000 s (which shifts every later column
+    right by one), and a clock re-referenced mid-file when one CouchShift file
+    holds several kV acquisitions (see _rebase_restarts).
+
+    Returns dict of numpy arrays: t, lr, si, ap (uncorrected positions on the
+    real timebase, monotonic), int array file_index, int n_markers, and
+    int time_restarts (how many clock re-references were re-based, 0 for a
+    well-formed log).
     """
     files = _numbered_files(folder, _GA_RE)
     markers = _marker_columns(files[0]) if files else None
@@ -92,28 +163,19 @@ def read_kim_segments(folder: Path) -> dict:
         markers = _marker_columns(files[0])
     t, lr, si, ap, fi = [], [], [], [], []
     for k, fp in enumerate(files):
-        if markers is None:
-            df = _read_positional(fp, usecols=[1, 2, 3, 4])
-            df.columns = ["time", "ap", "lr", "si"]
-            t.append(df["time"].to_numpy(float))
-            ap.append(df["ap"].to_numpy(float))
-            lr.append(df["lr"].to_numpy(float))
-            si.append(df["si"].to_numpy(float))
-        else:
-            axis_cols = {axis: [m[axis] for m in markers.values()]
-                         for axis in ("AP", "LR", "SI")}
-            usecols = sorted({1, *(c for cs in axis_cols.values() for c in cs)})
-            df = _read_positional(fp, usecols=usecols)
-            t.append(df[1].to_numpy(float))
-            for axis, dest in (("AP", ap), ("LR", lr), ("SI", si)):
-                dest.append(np.mean(
-                    [df[c].to_numpy(float) for c in axis_cols[axis]], axis=0))
-        fi.append(np.full(len(df), k, dtype=int))
+        seg = _read_one_file(fp, markers)
+        t.append(seg["t"])
+        ap.append(seg["ap"])
+        lr.append(seg["lr"])
+        si.append(seg["si"])
+        fi.append(np.full(len(seg["t"]), k, dtype=int))
+    times, restarts = _rebase_restarts(np.concatenate(t))
     return {
-        "t": np.concatenate(t), "lr": np.concatenate(lr),
+        "t": times, "lr": np.concatenate(lr),
         "si": np.concatenate(si), "ap": np.concatenate(ap),
         "file_index": np.concatenate(fi),
         "n_markers": len(markers) if markers else 1,
+        "time_restarts": restarts,
     }
 
 

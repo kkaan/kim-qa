@@ -74,21 +74,44 @@ def hex_time_axis(hex_data: dict) -> np.ndarray:
     return np.arange(hex_data["n"]) * hex_data["dt"]
 
 
-def expected_centroid(session: Session) -> dict:
+def expected_centroid(session: Session, cbct: dict | None = None) -> dict:
     """Per-axis expected marker-centroid offset from iso (mm, keys lr/si/ap)
     plus the source filename. Without a centroid file the expected offset is
     zero — correct for test-vs-baseline comparisons where the shared centroid
-    cancels in the residuals."""
+    cancels in the residuals.
+
+    `cbct` is an independently measured setup error (mm per axis), added here
+    so it reaches every consumer of this dict — the primary KIM trace, a
+    baseline ground truth and the offline overlays all subtract it. Note it is
+    added on the no-centroid-file path too: an offset typed against a root
+    that has no centroid file must still apply.
+    """
+    off = cbct or {}
+    lr = float(off.get("lr", 0.0))
+    si = float(off.get("si", 0.0))
+    ap = float(off.get("ap", 0.0))
     if session.centroid_file is None:
-        return {"file": None, "lr": 0.0, "si": 0.0, "ap": 0.0}
+        return {"file": None, "lr": lr + 0.0, "si": si + 0.0, "ap": ap + 0.0,
+                "cbct": _cbct_or_none(off)}
     exp = parse_centroid_file(session.centroid_file)["expected_centroid"]
     # parse_centroid_file axes map x->LR, y->SI, z->AP (see kim_qa.metrics).
     # "+ 0.0" normalises IEEE -0.0 so displays never show "-0.00".
-    return {"file": session.centroid_file.name, "lr": float(exp["x"]) + 0.0,
-            "si": float(exp["y"]) + 0.0, "ap": float(exp["z"]) + 0.0}
+    return {"file": session.centroid_file.name,
+            "lr": float(exp["x"]) + lr + 0.0,
+            "si": float(exp["y"]) + si + 0.0,
+            "ap": float(exp["z"]) + ap + 0.0,
+            "cbct": _cbct_or_none(off)}
 
 
-def load_session_arrays(session: Session, vendor: str) -> dict:
+def _cbct_or_none(off: dict) -> dict | None:
+    """The measured offset as plotted/reported, or None when it is all-zero,
+    so an unset offset stays invisible to clients and reports."""
+    vals = {ax: float(off.get(ax, 0.0)) for ax in ("lr", "si", "ap")}
+    return vals if any(vals.values()) else None
+
+
+def load_session_arrays(session: Session, vendor: str,
+                        cbct: dict | None = None) -> dict:
     """Raw-timebase stitched arrays, couch-shift-corrected (shift-removed)
     and centroid-corrected (expected marker offset from iso subtracted).
 
@@ -98,7 +121,7 @@ def load_session_arrays(session: Session, vendor: str) -> dict:
     """
     folder = session.kim_file.parent
     segs = read_kim_segments(folder)
-    cent = expected_centroid(session)
+    cent = expected_centroid(session, cbct)
     shifts = []
     lr = segs["lr"] - cent["lr"]
     si = segs["si"] - cent["si"]
@@ -235,8 +258,9 @@ def _resolve_offset(session: Session, arrays: dict, hex_data: dict | None,
 
 
 def build_overlay_payload(session: Session, vendor: str,
-                          state_entry: dict | None) -> dict:
-    arrays = load_session_arrays(session, vendor)
+                          state_entry: dict | None,
+                          cbct: dict | None = None) -> dict:
+    arrays = load_session_arrays(session, vendor, cbct)
     if session.kind == "motion" and session.baseline_dir is not None:
         hex_data = read_baseline_gt(session.baseline_dir, arrays["centroid"],
                                     vendor)

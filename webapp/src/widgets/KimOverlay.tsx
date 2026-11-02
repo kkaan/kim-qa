@@ -17,6 +17,7 @@ const OFFSET_MAX = 400;
 const OFFSET_STEP = 0.05;
 const OFFSET_NUDGES = [10, 1, 0.2];
 const DEFAULT_Y_RANGE = 10;         // mm; spec: default +/-10 on all panels
+const PLOT_HEIGHT = 560;            // px; also the saved-PNG height
 const COMPRESS_MIN_GAP = 20;        // s
 const COMPRESS_KEEP = 7;            // s
 // A couch shift sits at the file boundary just before its dead-time gap (the
@@ -110,7 +111,11 @@ export default function KimOverlay({
 }: Props) {
   const experiment = entry.id;
   const framesBase = framesBaseFor(experiment);
-  const height = 560;
+  // Plot height. Normally fixed; while the plot is fullscreen it tracks the
+  // screen so the traces use the whole display. PNG export stays at
+  // PLOT_HEIGHT regardless, so a saved overlay.png never depends on it.
+  const [height, setHeight] = useState(PLOT_HEIGHT);
+  const [isFull, setIsFull] = useState(false);
   // The parent-remembered view for this session at mount time. In a ref so it
   // is applied once (after the payload loads) without re-running the fetch.
   const initialViewRef = useRef(initialView);
@@ -529,8 +534,10 @@ export default function KimOverlay({
       };
     }
     if (gt && gt.vals.length && dxr) {
+      // The gantry labels sit at log times, so this axis must stay locked to the
+      // time axis: `matches` makes any pan/zoom on either one move both.
       layout.xaxis4 = {
-        overlaying: 'x', side: 'top', anchor: 'y', tickmode: 'array',
+        overlaying: 'x', matches: 'x', side: 'top', anchor: 'y', tickmode: 'array',
         tickvals: gt.vals, ticktext: gt.text, ticks: 'outside', showgrid: false,
         zeroline: false, range: dxr, autorange: false,
         title: { text: 'Gantry (deg)', font: { size: 13 } }, tickfont: { size: 12 },
@@ -540,7 +547,7 @@ export default function KimOverlay({
     }
     return { data, layout };
   }, [payload, hex, squashInfo, offset, offlineOffsets, ranges, errorMode,
-      showGhost, yRange, colors, defaultXRange, xRange, experiment]);
+      showGhost, yRange, colors, defaultXRange, xRange, experiment, height]);
 
   const config = useMemo(
     () => ({
@@ -711,7 +718,7 @@ export default function KimOverlay({
     setSaving(true);
     try {
       const url = await Plotly.toImage(graphDivRef.current, {
-        format: 'png', width: 1400, height, scale: 2,
+        format: 'png', width: 1400, height: PLOT_HEIGHT, scale: 2,
       });
       const png_base64 = url.split(',')[1];
       await postSave(experiment, { ...stateBody(), png_base64 });
@@ -796,6 +803,45 @@ export default function KimOverlay({
     return `${d > 0 ? '+' : '-'}${mag}`;
   };
 
+  // Fullscreen the plot alone (metrics, kV panel and controls stay behind).
+  // The browser owns the transition: Esc, F11 and the button all land in
+  // `fullscreenchange`, so that listener is the single source of truth for
+  // `isFull` rather than anything we set optimistically here.
+  const toggleFullscreen = () => {
+    const el = plotWrapRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch((e) => onToast(String(e)));
+    } else {
+      // Can be refused by browser policy even from a click; say so rather
+      // than leaving the button looking dead.
+      el.requestFullscreen().catch(
+        (e) => onToast(`Could not go fullscreen: ${e?.message ?? e}`));
+    }
+  };
+
+  useEffect(() => {
+    const onChange = () => {
+      const full = document.fullscreenElement === plotWrapRef.current;
+      setIsFull(full);
+      // innerHeight is the fullscreen element's own box once the transition
+      // has happened, so the plot fills the display exactly.
+      setHeight(full ? window.innerHeight : PLOT_HEIGHT);
+    };
+    // Fullscreen survives a rotate/display change; keep the plot filling it.
+    const onResize = () => {
+      if (document.fullscreenElement === plotWrapRef.current) {
+        setHeight(window.innerHeight);
+      }
+    };
+    document.addEventListener('fullscreenchange', onChange);
+    window.addEventListener('resize', onResize);
+    return () => {
+      document.removeEventListener('fullscreenchange', onChange);
+      window.removeEventListener('resize', onResize);
+    };
+  }, []);
+
   const baseStyle = { fontFamily: 'var(--font-body)' as const };
 
   if (error) {
@@ -816,7 +862,12 @@ export default function KimOverlay({
   return (
     <div style={{ ...baseStyle, position: 'relative', display: 'flex', flexDirection: 'column', width: '100%', gap: 12 }}>
       <div style={{ display: 'flex', gap: 24, alignItems: 'stretch' }}>
-        <div ref={plotWrapRef} style={{ flex: 1, minWidth: 0, position: 'relative' }}>
+        <div ref={plotWrapRef} style={{
+          flex: 1, minWidth: 0, position: 'relative',
+          // layout.paper_bgcolor is transparent, so without this the plot
+          // would sit on the browser's black fullscreen backdrop.
+          background: isFull ? 'var(--paper)' : undefined,
+        }}>
           <Plot
             data={figure.data}
             layout={figure.layout}
@@ -833,6 +884,21 @@ export default function KimOverlay({
             onUpdate={(_f: any, gd: any) => { graphDivRef.current = gd; }}
           />
           {tip && <PointTip tip={tip} colors={colors} />}
+          <button
+            type="button"
+            onClick={toggleFullscreen}
+            title={isFull ? 'Exit fullscreen (Esc)' : 'Fullscreen plot'}
+            aria-label={isFull ? 'Exit fullscreen' : 'Fullscreen plot'}
+            style={{
+              ...btnStyle, position: 'absolute', top: 6, right: 8, zIndex: 5,
+              padding: '4px 8px', fontSize: 15, lineHeight: 1,
+              background: isFull ? 'var(--orange)' : '#fff',
+              color: isFull ? '#fff' : 'var(--ink-2)',
+              opacity: 0.85,
+            }}
+          >
+            {isFull ? '✕' : '⛶'}
+          </button>
         </div>
         <div style={{ width: 340, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 12 }}>
           <MetricsPanel rows={metrics.rows} n={metrics.n} totalDt={metrics.totalDt} source={metrics.source} mono={colors.mono} color={metrics.color} heading={gtIsBaseline ? `Tracking error. KIM vs baseline ${gtSource!.name}` : 'Tracking error. KIM vs HexaMotion'} />

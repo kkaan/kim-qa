@@ -17,7 +17,7 @@ def motion_with_kv(tmp_path, n_missing=1):
     # n_missing as 1024x768 uint16 gradients.
     arr = (np.arange(768 * 1024, dtype=np.uint16).reshape(768, 1024) % 4096)
     for i in range(16 - n_missing):
-        Image.fromarray(arr, mode="I;16").save(kv / f"Ch1_0_{i:04d}.tiff")
+        Image.fromarray(arr).save(kv / f"Ch1_0_{i:04d}.tiff")
     cfg = ServerConfig(root=tmp_path)
     return {s.id: s for s in discover_sessions(cfg)}["lung-typical,Test_1518"]
 
@@ -51,6 +51,15 @@ def test_render_crop_windows_and_caches(tmp_path):
     assert img.max() == 255                     # windowed to full scale
     mtime = p.stat().st_mtime
     assert render_frame_png(sess, "Ch1_0_0000.png").stat().st_mtime == mtime
+
+
+def test_render_rejects_a_jpeg_named_tiff(tmp_path):
+    """Only the TIFF decoder may run, whatever the file's content claims."""
+    sess = motion_with_kv(tmp_path)
+    kv = sess.kim_file.parent / "KIM-KV"
+    Image.fromarray(np.zeros((8, 8), np.uint8)).save(
+        kv / "Ch1_0_0001.tiff", format="JPEG")
+    assert render_frame_png(sess, "Ch1_0_0001.png") is None
 
 
 def test_render_missing_tiff_returns_none(tmp_path):

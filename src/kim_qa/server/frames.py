@@ -119,7 +119,13 @@ def render_frame_png(session: Session, png_name: str):
         tiff = kv_dir / (Path(png_name).stem + ".tif")
         if not tiff.exists():
             return None
-    arr = np.asarray(Image.open(tiff))
+    # Pillow picks its decoder from a file's content, not its name, so limit it
+    # to TIFF: a bad file in the folder then can't reach any other decoder.
+    try:
+        with Image.open(tiff, formats=["TIFF"]) as im:
+            arr = np.asarray(im)
+    except OSError:
+        return None
     crop = arr[CROP_Y0:CROP_Y0 + CROP_SIZE, CROP_X0:CROP_X0 + CROP_SIZE]
-    Image.fromarray(_window_to_uint8(crop), mode="L").save(out)
+    Image.fromarray(_window_to_uint8(crop)).save(out)
     return out

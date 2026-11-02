@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  AppConfig, AppManifest, ManifestEntry, browseCentroidFile, fetchConfig,
-  fetchManifest, postCentroidFile, postVendor,
+  AppConfig, AppManifest, CbctOffset, ManifestEntry, browseCentroidFile,
+  fetchConfig, fetchManifest, postCbctOffset, postCentroidFile, postVendor,
 } from './api';
 import KimOverlay, { ViewState } from './widgets/KimOverlay';
 
@@ -83,6 +83,25 @@ export default function App() {
     } catch (e) {
       setToast(String(e));
       setPathDraft(config.centroid_file ?? '');
+    }
+  };
+
+  // A setup error measured independently of KIM (typically on CBCT), typed in
+  // mm per axis. The number entered is what was MEASURED, so the server adds
+  // it to the expected centroid and thereby subtracts it from every KIM
+  // trace. Root-wide, like the centroid pick, so it reloads the manifest.
+  const changeCbct = async (axis: keyof CbctOffset, value: number) => {
+    const next = { ...config.cbct_offset, [axis]: value };
+    try {
+      setConfig(await postCbctOffset(next));
+      await reload();
+      const any = next.lr || next.si || next.ap;
+      setToast(any
+        ? `CBCT detected offset: LR ${fmtMm(next.lr)}, SI ${fmtMm(next.si)}, `
+          + `AP ${fmtMm(next.ap)} mm subtracted from KIM in every session.`
+        : 'CBCT detected offset cleared.');
+    } catch (e) {
+      setToast(String(e));
     }
   };
 
@@ -169,6 +188,23 @@ export default function App() {
                 borderRadius: 3, background: 'var(--paper)', color: 'var(--ink-2)',
               }} />
           </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <span title="Setup error measured independently of KIM. Entered as
+measured, so it is subtracted from every KIM trace and recorded in the report
+as the CBCT detected offset.">
+              CBCT detected offset (mm)
+            </span>
+            {(['lr', 'si', 'ap'] as const).map((ax) => (
+              <CbctField key={ax} axis={ax} value={config.cbct_offset[ax]}
+                onCommit={(v) => changeCbct(ax, v)} />
+            ))}
+            {(config.cbct_offset.lr || config.cbct_offset.si
+              || config.cbct_offset.ap) ? (
+              <span style={{ color: 'var(--orange)', fontSize: 12 }}>
+                applied to all sessions
+              </span>
+            ) : null}
+          </div>
         </div>
 
         {!entry ? (
@@ -198,7 +234,8 @@ export default function App() {
             {/* Key includes the vendor so a vendor switch remounts and refetches
                 the open session with re-signed couch corrections, and the
                 centroid pick, which shifts every trace by a new expected offset. */}
-            <KimOverlay key={`${entry.id}:${config.vendor}:${config.centroid_file ?? ''}`}
+            <KimOverlay key={`${entry.id}:${config.vendor}:${config.centroid_file ?? ''}`
+              + `:${config.cbct_offset.lr},${config.cbct_offset.si},${config.cbct_offset.ap}`}
               entry={entry} traces={manifest.traces}
               baselines={manifest.baselines ?? []}
               onToast={setToast} onStateSaved={reload}
@@ -217,6 +254,50 @@ export default function App() {
         )}
       </main>
     </div>
+  );
+}
+
+// One decimal place, always signed, so +0.5 and -0.5 are never confusable.
+const fmtMm = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}`;
+
+// A per-axis mm field. Draft state so typing does not fire a request per
+// keystroke (the same pattern as the centroid path field); commits on Enter
+// or blur, reverts on Escape. Rounded to 1 dp on commit to match what the
+// server stores, so the field can never disagree with the report.
+function CbctField({ axis, value, onCommit }: {
+  axis: 'lr' | 'si' | 'ap'; value: number; onCommit: (v: number) => void;
+}) {
+  const [draft, setDraft] = useState(value.toFixed(1));
+  useEffect(() => { setDraft(value.toFixed(1)); }, [value]);
+  const commit = () => {
+    const v = Number(draft);
+    // A half-typed "-" or "" reads as 0; anything unparseable reverts rather
+    // than silently zeroing a real offset.
+    if (draft.trim() === '') { onCommit(0); return; }
+    if (!Number.isFinite(v)) { setDraft(value.toFixed(1)); return; }
+    const rounded = Math.round(v * 10) / 10;
+    if (rounded !== value) onCommit(rounded);
+    else setDraft(value.toFixed(1));
+  };
+  return (
+    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+      <span style={{ textTransform: 'uppercase' }}>{axis}</span>
+      <input
+        type="number" step={0.1} value={draft} spellCheck={false}
+        aria-label={`CBCT detected offset ${axis.toUpperCase()} (mm)`}
+        onChange={(ev) => setDraft(ev.target.value)}
+        onKeyDown={(ev) => {
+          if (ev.key === 'Enter') commit();
+          if (ev.key === 'Escape') setDraft(value.toFixed(1));
+        }}
+        onBlur={commit}
+        style={{
+          width: 68, fontFamily: 'var(--font-mono)', fontSize: 12,
+          padding: '3px 6px', border: '1px solid var(--line)',
+          borderRadius: 3, background: 'var(--paper)',
+          color: value ? 'var(--orange)' : 'var(--ink-2)',
+        }} />
+    </label>
   );
 }
 

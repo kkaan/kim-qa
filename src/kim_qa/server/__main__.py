@@ -10,7 +10,7 @@ from kim_qa.version import __version__
 
 from .app import create_app
 from .config import ServerConfig
-from .state import load_centroid_file, load_vendor
+from .state import load_cbct_offset, load_centroid_file, load_vendor
 
 
 def parse_args(argv=None):
@@ -66,9 +66,12 @@ def main(argv=None) -> int:
     vendor = args.vendor or load_vendor(root) or "Elekta"
     # Same precedence for the centroid pick; absent everywhere = auto-detect.
     centroid = args.centroid or load_centroid_file(root)
+    # No flag for the CBCT offset: it is measured per setup and typed in the
+    # UI, so the persisted per-root value is the only source.
     config = ServerConfig(root=root, traces_root=args.traces_root,
                           baselines_root=args.baselines_root, vendor=vendor,
-                          centroid_file=centroid)
+                          centroid_file=centroid,
+                          cbct_offset=load_cbct_offset(root))
     app = create_app(config)
     port = args.port or _free_port()
     url = f"http://127.0.0.1:{port}/"

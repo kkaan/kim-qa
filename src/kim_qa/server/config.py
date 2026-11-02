@@ -14,6 +14,10 @@ class ServerConfig:
     # Manual centroid pick, a filename directly under `root`, applied to every
     # session. None = auto-detect (session folder preferred over the root).
     centroid_file: str | None = None
+    # Setup error measured independently (e.g. by CBCT), mm per axis, applied
+    # to every session. The entered value is what was MEASURED, so it is added
+    # to the expected centroid and thereby subtracted from KIM.
+    cbct_offset: dict | None = None
 
     def __post_init__(self):
         self.root = Path(self.root)

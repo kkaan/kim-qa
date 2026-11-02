@@ -64,7 +64,12 @@ export type AppConfig = {
   // results root or an absolute path anywhere on disk.
   centroid_file: string | null;
   centroid_files: string[];       // *.txt directly under the results root
+  // Independently measured setup error, mm per axis. The value is what was
+  // MEASURED, so the server subtracts it from KIM. All-zeros = not set.
+  cbct_offset: CbctOffset;
 };
+
+export type CbctOffset = { lr: number; si: number; ap: number };
 
 export type StateBody = {
   offset: number;
@@ -106,6 +111,10 @@ export const postCentroidFile = (centroid_file: string) =>
   post<AppConfig>('/api/config', { centroid_file });
 // Opens a native file dialog on the machine running the server and returns the
 // chosen path (null if cancelled). Saves nothing — post the path to apply it.
+// Rejects a non-finite or unknown-axis value, so the caller must surface
+// errors. Rounded to 1 dp server-side, matching what the field accepts.
+export const postCbctOffset = (cbct_offset: CbctOffset) =>
+  post<AppConfig>('/api/config', { cbct_offset });
 export const browseCentroidFile = () =>
   post<{ path: string | null }>('/api/browse/centroid', {});
 export const fetchPayload = (id: string) =>
